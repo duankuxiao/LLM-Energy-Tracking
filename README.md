@@ -1,6 +1,17 @@
-# AI Data Center Footprint Model
+<p align="center">
+  <img src="logo.png" alt="Logo" width="200"/>
+</p>
 
-This repository computes the projected energy, carbon, and water footprints of AI data centers across 24 countries for the manuscript figures.
+<h1 align="center">AI Data Center Footprint Model</h1>
+
+<p align="center">
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.8+-blue.svg" alt="Python Version"></a>
+  <a href="https://pytorch.org/"><img src="https://img.shields.io/badge/PyTorch-2.0+-red.svg" alt="PyTorch"></a>
+</p>
+
+<p align="center">
+  This repository computes the projected energy, carbon, and water footprints of AI data centers across 24 countries for the manuscript figures.
+</p>
 
 It supports:
 - demand scenarios from 2025 to 2030
