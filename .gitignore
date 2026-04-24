@@ -1,0 +1,10 @@
+paper/
+results/
+
+.idea/
+__pycache__/
+*.pyc
+.vscode/
+*.log
+Thumbs.db
+.DS_Store
