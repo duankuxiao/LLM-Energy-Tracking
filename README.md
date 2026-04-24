@@ -148,3 +148,21 @@ idle_power_rate,Server idle power,idle_power_rate,0.1,0.23,0.35,...
 ## Additional Notes
 
 - The workflow is CSV-first, so plotting and downstream analysis can be done separately.
+
+## License
+
+This project is released under the MIT License. See [LICENSE](LICENSE).
+
+## Citation
+
+If you use this repository in academic work, please cite the manuscript:
+
+```bibtex
+@misc{hu2026future_ai_footprint,
+  title = {The future footprint of AI will be determined by how its infrastructure is built powered and governed},
+  author = {Hu, Zehuan and Gao, Yuan and Ding, Lu and Yan, Ke and Yu, Guangsuo and Lam, Su Shiung and Li, Hao and Ruan, Yingjun and Gao, Weijun},
+  year = {2026},
+  note = {Manuscript submitted to Nature},
+  url = {https://github.com/duankuxiao/LLM-Energy-Tracking}
+}
+```
