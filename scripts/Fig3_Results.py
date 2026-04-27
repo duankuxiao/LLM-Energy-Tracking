@@ -15,8 +15,8 @@ if __name__ == '__main__':
                  "Netherlands", "Spain", "Sweden", "Belgium", "Norway",
                  "Poland", "Switzerland"]
     scenarios = ["Base"]
-    renewable_energy_policy = 'CP'
-    for LLM_policy in ['SDS', 'UGD', 'CP']:
+    renewable_energy_policy = 'BCD'
+    for LLM_policy in ['SDS', 'UGD', 'BCD']:
         if LLM_policy == 'SDS':  # Strict Data Sovereignty
             infer_ratio_by_country = {'USA': 0.7, 'Belgium': 0.7}
         elif LLM_policy == 'UGD':  # Unconstrained Global Deployment
