@@ -27,6 +27,7 @@ Code/
 |- core/        # Core calculation and optimization modules
 |- scripts/     # Entry scripts for Fig. 1 to Fig. 5
 |- dataset/     # Input datasets and scenario factors
+|- data_provider/ # Regression scripts used to derive factor inputs
 |- paper/       # Manuscript and supplementary information
 |- results/     # Generated outputs
 `- run_example.py
@@ -159,6 +160,7 @@ idle_power_rate,Server idle power,idle_power_rate,0.1,0.23,0.35,...
 ## Additional Notes
 
 - The workflow is CSV-first, so plotting and downstream analysis can be done separately.
+- The 2025-2030 grid carbon factors and grid water factors were fitted with `data_provider/carbon_emission_factor_regression.py` and `data_provider/grid_water_factor_regression.py`. For convenience, the fitted results are already provided as dictionaries in `dataset/Factors.py`, so you do not need to run these two scripts again for normal use.
 
 ## License
 
