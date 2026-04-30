@@ -658,21 +658,64 @@ def process_chunk(chunk_df, chunk_id, output_dir, output_mode='base_wue_only'):
     print(f"[Worker {chunk_id}] Finished! Saved to {output_filename}")
 
 
-def run_parallel_processing(input_csv, output_dir='.', output_mode='base_wue_only'):
+def _merge_worker_outputs(output_dir, chunk_ids, merged_output_filename):
+    """
+    Merge worker CSV files after all processes finish.
+
+    Partial worker files are deleted only after the merged CSV is written
+    successfully. If merging fails, the partial files are preserved.
+    """
+    partial_paths = [
+        os.path.join(output_dir, f"output_part_{chunk_id}.csv")
+        for chunk_id in chunk_ids
+    ]
+    merged_output_path = os.path.join(output_dir, merged_output_filename)
+
+    try:
+        part_frames = []
+        for partial_path in partial_paths:
+            if not os.path.isfile(partial_path):
+                raise FileNotFoundError(f"Missing worker output: {partial_path}")
+            part_frames.append(pd.read_csv(partial_path))
+
+        merged_df = pd.concat(part_frames, ignore_index=True)
+        merged_df.to_csv(merged_output_path, index=False, encoding='utf-8')
+    except Exception as exc:
+        print(f"Merge failed. Partial files were kept in {output_dir}. Error: {exc}")
+        return None
+
+    for partial_path in partial_paths:
+        try:
+            os.remove(partial_path)
+        except OSError as exc:
+            print(f"Warning: merged output was created, but could not delete {partial_path}: {exc}")
+
+    return merged_output_path
+
+
+def run_parallel_processing(input_csv, output_dir='.', output_mode='base_wue_only', merged_output_filename=None):
     """
     Split the climate table and run country-level PUE/WUE optimization in parallel.
 
     Args:
         input_csv: Country climate input table.
-        output_dir: Directory for worker-level CSV outputs.
+        output_dir: Directory for worker-level and merged CSV outputs.
         output_mode: 'base_wue_only' writes country/base_wue only, which matches
             the manuscript workflow. Use 'full' to output best/base/worst PUE
             and WUE values for each country.
+        merged_output_filename: Optional final CSV filename. Defaults to
+            'base_wue_by_country.csv' for base WUE output and
+            'pue_wue_by_country.csv' for full output.
     """
     if not os.path.isfile(input_csv):
         raise FileNotFoundError(f"Input file not found: {input_csv}")
     if output_mode not in {'base_wue_only', 'full'}:
         raise ValueError("output_mode must be 'base_wue_only' or 'full'")
+    if merged_output_filename is None:
+        merged_output_filename = 'base_wue_by_country.csv' if output_mode == 'base_wue_only' else 'pue_wue_by_country.csv'
+
+    # Create the output directory before worker processes start writing.
+    os.makedirs(output_dir, exist_ok=True)
 
     # Load all country climate records.
     df_all = pd.read_csv(input_csv)
@@ -687,15 +730,19 @@ def run_parallel_processing(input_csv, output_dir='.', output_mode='base_wue_onl
 
     # Build worker argument tuples.
     tasks = []
+    chunk_ids = []
     for i, chunk in enumerate(df_chunks):
         if not chunk.empty:
             tasks.append((chunk, i, output_dir, output_mode))
+            chunk_ids.append(i)
 
     # Start the worker pool.
     with Pool(processes=num_processes) as pool:
         pool.starmap(process_chunk, tasks)
 
-    print("\nAll processes completed. Please merge the 'output_part_*.csv' files manually.")
+    merged_output_path = _merge_worker_outputs(output_dir, chunk_ids, merged_output_filename)
+    if merged_output_path:
+        print(f"\nAll processes completed. Merged output saved to: {merged_output_path}")
 
 
 if __name__ == "__main__":
