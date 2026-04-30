@@ -27,7 +27,7 @@ Code/
 |- core/        # Core calculation and optimization modules
 |- scripts/     # Entry scripts for Fig. 1 to Fig. 5
 |- dataset/     # Input datasets and scenario factors
-|- data_provider/ # Regression scripts used to derive factor inputs
+|- data_provider/ # Auxiliary scripts used to derive factor inputs
 |- paper/       # Manuscript and supplementary information
 |- results/     # Generated outputs
 `- run_example.py
@@ -161,6 +161,7 @@ idle_power_rate,Server idle power,idle_power_rate,0.1,0.23,0.35,...
 
 - The workflow is CSV-first, so plotting and downstream analysis can be done separately.
 - The 2025-2030 carbon emission factors and grid water factors were fitted with `data_provider/carbon_emission_factor_regression.py` and `data_provider/grid_water_factor_regression.py`. For convenience, the fitted results are already provided as dictionaries in `dataset/Factors.py`, so you do not need to run these two scripts again for normal use.
+- Country-level PUE and WUE values can be reproduced with `data_provider/pue_wue_optimizer.py`, which uses the cooling-system model in `data_provider/cooling_system_simulator.py` and the 2025 climate inputs in `dataset/climate_data_2025.csv`. In the manuscript workflow, PUE is taken from another dataset and only the base WUE output from this optimization is used. The final values have already been placed in `dataset/Factors.py`, so normal users do not need to run these scripts. They are included to make the derivation workflow complete and reproducible.
 
 ## License
 
