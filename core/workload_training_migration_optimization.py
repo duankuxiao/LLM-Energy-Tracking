@@ -1208,6 +1208,6 @@ if __name__ == "__main__":
         year_start=2026,
         migration_constraint="europe_only",  #  global  europe_only
         delay_hours=72,
-        commit_hours=72,
+        commit_hours=168,
         solver='gurobi',  # scipy  gurobi
     )
