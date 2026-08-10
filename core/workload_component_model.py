@@ -444,7 +444,7 @@ def build_workload_profile(
     workload_profile_path: Union[str, Path],
     workload_year: Optional[int] = 2020,
     interval_minutes: int = 15,
-    capacity_quantile: float = 0.95,
+    capacity_quantile: float = 0.97,
     classification_config: Optional[TaskClassificationConfig] = None,
     max_intervals: Optional[int] = None,
 ) -> WorkloadProfile:
@@ -803,7 +803,7 @@ def run_workload_component_footprint(
     execution_policy: str = "capacity",
     inference_origin_fraction: float = 0.75,
     cpu_data_origin_fraction: float = 0.50,
-    capacity_quantile: float = 0.95,
+    capacity_quantile: float = 0.97,
     max_resource_utilization: float = 1.0,
     pue_scale: float = 1.0,
     dlc_rate_0: float = 0.05,
@@ -842,7 +842,7 @@ def run_workload_component_footprint(
 
     emission_factors, grid_water_factors = _policy_factors(renewable_energy_policy)
     origin_weights = _as_task_weight_table(countries, task_origin_weights)
-    country_share = _normalize_weights(countries, it_ratio)
+    country_share = np.array([float(it_ratio[country]) for country in countries], dtype=float)
 
     profile = build_workload_profile(
         workload_profile_path=workload_profile_path,
@@ -1131,6 +1131,6 @@ if __name__ == "__main__":
     run_workload_component_footprint(
         renewable_energy_policy="CP",
         scenarios=["Base"],
-        years=5,
-        year_start=2026,
+        years=6,
+        year_start=2025,
     )

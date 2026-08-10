@@ -93,7 +93,7 @@ def parse_args():
     parser.add_argument(
         "--capacity-quantile",
         type=float,
-        default=0.95,
+        default=0.97,
         help="Trace load quantile treated as the reference provisioned capacity.",
     )
     parser.add_argument(

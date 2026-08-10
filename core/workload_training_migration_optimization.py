@@ -787,7 +787,7 @@ def run_training_migration_optimization(
     execution_policy: str = "capacity",
     inference_origin_fraction: float = 0.75,
     cpu_data_origin_fraction: float = 0.50,
-    capacity_quantile: float = 0.95,
+    capacity_quantile: float = 0.97,
     max_resource_utilization: float = 1.0,
     pue_scale: float = 1.0,
     hourly_carbon_factors_dir: Optional[Union[str, Path]] = ROOT_DIR / "dataset" / "EM-estimate",
@@ -850,7 +850,7 @@ def run_training_migration_optimization(
 
     origin_weights = _as_task_weight_table(countries, task_origin_weights)
     training_origin_weights = origin_weights[TASK_TYPES.index("training")]
-    country_share = _normalize_weights(countries, it_ratio)
+    country_share = np.array([float(it_ratio[country]) for country in countries], dtype=float)
     europe_set = set(europe_countries)
     europe_ids = np.array(
         [country_id for country_id, country in enumerate(countries) if country in europe_set],
@@ -1207,6 +1207,7 @@ if __name__ == "__main__":
         years=5,
         year_start=2026,
         migration_constraint="europe_only",  #  global  europe_only
-        commit_hours=36,
+        delay_hours=72,
+        commit_hours=72,
         solver='gurobi',  # scipy  gurobi
     )
