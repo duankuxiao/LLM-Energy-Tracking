@@ -28,8 +28,8 @@ from core.workload_component_model import run_workload_component_footprint
 results = run_workload_component_footprint(
     renewable_energy_policy="CP",
     scenarios=["Base"],
-    years=6,
-    year_start=2025,
+    years=5,
+    year_start=2026,
     save_outputs=True,
 )
 ```
@@ -631,8 +631,8 @@ python scripts/Run_workload_component_model.py
 
 - `policy=CP`
 - `scenarios=Base`
-- `years=6`
-- `year_start=2025`
+- `years=5`
+- `year_start=2026`
 - 使用 `dataset/result_df_full_year_2020.pkl`
 - 使用 `dataset/EM-estimate` 中的小时级碳因子
 - 不保存 `hourly_carbon` 大表
@@ -698,11 +698,11 @@ python scripts/Run_workload_component_model.py ^
 run_workload_component_footprint(
     renewable_energy_policy="CP",
     scenarios=["Base"],
-    years=6,
+    years=5,
     countries=None,
     workload_profile_path="dataset/result_df_full_year_2020.pkl",
     workload_year=2020,
-    year_start=2025,
+    year_start=2026,
     output_dir="results/workload_component_model",
     save_outputs=True,
     verbose=True,
@@ -727,7 +727,7 @@ run_workload_component_footprint(
 - `renewable_energy_policy`：`CP`、`NDC` 或 `NZ`。
 - `scenarios`：`Base`、`Lift-Off`、`High Efficiency`、`Headwinds`。
 - `years`：输出年份数。
-- `year_start`：输出起始年份，当前年度数据支持 2025-2030。
+- `year_start`：输出起始年份，默认 2026。当前年度数据支持 2025-2030，但小时级碳因子从 2026 年开始。
 - `execution_policy`：任务执行地分配策略。
 - `capacity_quantile`：将 trace 负载的哪个分位数视作参考容量。
 - `max_resource_utilization`：缩放后资源利用率上限。
@@ -768,4 +768,3 @@ run_workload_component_footprint(
 - `hourly_carbon` 中 `carbon_factor_source` 是否为 `hourly`，避免误用年度 fallback。
 - `capacity_overflow` 是否过大。如果过大，说明任务分配或容量假设可能导致某些国家资源不足。
 - `trace_resource_capacity` 中各资源参考容量是否合理，尤其是 GPU 和 storage。
-

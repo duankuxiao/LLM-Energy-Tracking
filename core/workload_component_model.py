@@ -788,11 +788,11 @@ def _dlc_adjusted_wue(countries: Sequence[str], year_idx: int, dlc_rate_0: float
 def run_workload_component_footprint(
     renewable_energy_policy: str,
     scenarios: Sequence[str],
-    years: int,
+    years: int = 5,
     countries: Optional[Sequence[str]] = None,
     workload_profile_path: Union[str, Path] = ROOT_DIR / "dataset" / "result_df_full_year_2020.pkl",
     workload_year: Optional[int] = 2020,
-    year_start: int = 2025,
+    year_start: int = 2026,
     output_dir: Union[str, Path] = ROOT_DIR / "results" / "workload_component_model",
     save_outputs: bool = True,
     verbose: bool = True,
@@ -1131,5 +1131,6 @@ if __name__ == "__main__":
     run_workload_component_footprint(
         renewable_energy_policy="CP",
         scenarios=["Base"],
-        years=6,
+        years=5,
+        year_start=2026,
     )

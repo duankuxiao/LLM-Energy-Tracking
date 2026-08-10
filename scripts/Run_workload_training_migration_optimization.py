@@ -6,12 +6,17 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from core.workload_component_model import run_workload_component_footprint
+from core.workload_training_migration_optimization import (  # noqa: E402
+    MIGRATION_CONSTRAINTS,
+    SOLVE_MODES,
+    SOLVERS,
+    run_training_migration_optimization,
+)
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Run the workload-driven component energy model."
+        description="Optimize training workload migration for minimum global CO2 emissions."
     )
     parser.add_argument("--policy", choices=["CP", "NDC", "NZ"], default="CP")
     parser.add_argument(
@@ -23,19 +28,55 @@ def parse_args():
     parser.add_argument("--years", type=int, default=5)
     parser.add_argument("--year-start", type=int, default=2026)
     parser.add_argument(
+        "--constraint",
+        choices=MIGRATION_CONSTRAINTS,
+        default="global",
+        help="global allows all modeled countries; europe_only only moves European training within Europe.",
+    )
+    parser.add_argument(
+        "--delay-hours",
+        type=int,
+        default=24,
+        help="Maximum allowed training delay in hours.",
+    )
+    parser.add_argument(
+        "--solve-mode",
+        choices=SOLVE_MODES,
+        default="auto",
+        help="auto uses a single LP for small runs and rolling windows for large full-year runs.",
+    )
+    parser.add_argument(
+        "--solver",
+        choices=SOLVERS,
+        default="scipy",
+        help="Linear programming backend used inside each optimization window.",
+    )
+    parser.add_argument(
+        "--commit-hours",
+        type=int,
+        default=24,
+        help="Number of source hours committed per rolling-window LP.",
+    )
+    parser.add_argument(
+        "--monolithic-variable-limit",
+        type=int,
+        default=1_000_000,
+        help="In auto mode, switch to windowed solving above this estimated variable count.",
+    )
+    parser.add_argument(
         "--workload-path",
         default=str(ROOT_DIR / "dataset" / "result_df_full_year_2020.pkl"),
     )
     parser.add_argument("--workload-year", type=int, default=2020)
     parser.add_argument(
         "--output-dir",
-        default=str(ROOT_DIR / "results" / "workload_component_model"),
+        default=str(ROOT_DIR / "results" / "workload_training_migration_optimization"),
     )
     parser.add_argument(
         "--execution-policy",
         choices=["capacity", "origin", "hybrid"],
         default="capacity",
-        help="capacity allocates execution by data-center capacity; origin keeps execution near demand; hybrid mixes both.",
+        help="Execution policy for fixed inference and CPU/data workloads.",
     )
     parser.add_argument(
         "--inference-origin-fraction",
@@ -59,7 +100,7 @@ def parse_args():
         "--max-resource-utilization",
         type=float,
         default=1.0,
-        help="Upper bound applied to trace-derived utilization before scaling to future capacity.",
+        help="Maximum country-level utilization allowed by the migration optimizer.",
     )
     parser.add_argument(
         "--hourly-carbon-dir",
@@ -75,7 +116,7 @@ def parse_args():
     parser.add_argument(
         "--disable-hourly-carbon",
         action="store_true",
-        help="Use the original annual carbon factors instead of hourly carbon CSV files.",
+        help="Use annual carbon factors expanded to hourly values.",
     )
     parser.add_argument(
         "--strict-hourly-carbon",
@@ -83,15 +124,21 @@ def parse_args():
         help="Fail when an hourly carbon CSV is missing instead of falling back to annual factors.",
     )
     parser.add_argument(
-        "--save-hourly-carbon",
+        "--save-schedule",
         action="store_true",
-        help="Also save the large country-hour carbon output CSV.",
+        help="Save non-zero migration decision variables. This can be large for full-year runs.",
     )
     parser.add_argument(
         "--max-intervals",
         type=int,
         default=None,
         help="Optional smoke-test limit for the number of 15-minute workload intervals.",
+    )
+    parser.add_argument(
+        "--linprog-time-limit",
+        type=float,
+        default=None,
+        help="Optional HiGHS time limit in seconds.",
     )
     parser.add_argument(
         "--no-save",
@@ -103,7 +150,11 @@ def parse_args():
 
 def main():
     args = parse_args()
-    results = run_workload_component_footprint(
+    linprog_options = {}
+    if args.linprog_time_limit is not None:
+        linprog_options["time_limit"] = args.linprog_time_limit
+
+    results = run_training_migration_optimization(
         renewable_energy_policy=args.policy,
         scenarios=args.scenarios,
         years=args.years,
@@ -120,17 +171,26 @@ def main():
         hourly_carbon_factors_dir=None if args.disable_hourly_carbon else args.hourly_carbon_dir,
         hourly_carbon_scope=args.hourly_carbon_scope,
         hourly_carbon_fallback_to_annual=not args.strict_hourly_carbon,
-        save_hourly_outputs=args.save_hourly_carbon,
+        delay_hours=args.delay_hours,
+        migration_constraint=args.constraint,
+        save_schedule=args.save_schedule,
         max_intervals=args.max_intervals,
+        solve_mode=args.solve_mode,
+        commit_hours=args.commit_hours,
+        monolithic_variable_limit=args.monolithic_variable_limit,
+        solver=args.solver,
+        linprog_options=linprog_options or None,
         verbose=True,
     )
 
-    summary = results["annual_summary"].groupby(["scenario", "year"], as_index=False)[
-        ["power_twh", "carbon_mtco2", "water_million_m3"]
-    ].sum()
     print()
-    print("Aggregate summary:")
-    print(summary.to_string(index=False, float_format=lambda value: f"{value:.4f}"))
+    print("Aggregate optimization summary:")
+    print(
+        results["annual_summary"].to_string(
+            index=False,
+            float_format=lambda value: f"{value:.6f}",
+        )
+    )
 
 
 if __name__ == "__main__":
