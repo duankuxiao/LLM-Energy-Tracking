@@ -444,7 +444,7 @@ def build_workload_profile(
     workload_profile_path: Union[str, Path],
     workload_year: Optional[int] = 2020,
     interval_minutes: int = 15,
-    capacity_quantile: float = 0.97,
+    capacity_quantile: float = 0.96,
     classification_config: Optional[TaskClassificationConfig] = None,
     max_intervals: Optional[int] = None,
 ) -> WorkloadProfile:
@@ -803,7 +803,7 @@ def run_workload_component_footprint(
     execution_policy: str = "capacity",
     inference_origin_fraction: float = 0.75,
     cpu_data_origin_fraction: float = 0.50,
-    capacity_quantile: float = 0.97,
+    capacity_quantile: float = 0.96,
     max_resource_utilization: float = 1.0,
     pue_scale: float = 1.0,
     dlc_rate_0: float = 0.05,

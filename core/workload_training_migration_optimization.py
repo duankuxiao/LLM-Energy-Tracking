@@ -787,7 +787,7 @@ def run_training_migration_optimization(
     execution_policy: str = "capacity",
     inference_origin_fraction: float = 0.75,
     cpu_data_origin_fraction: float = 0.50,
-    capacity_quantile: float = 0.97,
+    capacity_quantile: float = 0.96,
     max_resource_utilization: float = 1.0,
     pue_scale: float = 1.0,
     hourly_carbon_factors_dir: Optional[Union[str, Path]] = ROOT_DIR / "dataset" / "EM-estimate",
