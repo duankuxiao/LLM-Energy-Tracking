@@ -62,6 +62,12 @@ def parse_args():
         help="Upper bound applied to trace-derived utilization before scaling to future capacity.",
     )
     parser.add_argument(
+        "--load-factor",
+        type=float,
+        default=0.50,
+        help="Average IT power as a fraction of installed IT capacity.",
+    )
+    parser.add_argument(
         "--hourly-carbon-dir",
         default=str(ROOT_DIR / "dataset" / "EM-estimate"),
         help="Directory containing country-level hourly carbon factor CSV files.",
@@ -117,6 +123,7 @@ def main():
         cpu_data_origin_fraction=args.cpu_data_origin_fraction,
         capacity_quantile=args.capacity_quantile,
         max_resource_utilization=args.max_resource_utilization,
+        data_center_average_load_factor=args.load_factor,
         hourly_carbon_factors_dir=None if args.disable_hourly_carbon else args.hourly_carbon_dir,
         hourly_carbon_scope=args.hourly_carbon_scope,
         hourly_carbon_fallback_to_annual=not args.strict_hourly_carbon,
