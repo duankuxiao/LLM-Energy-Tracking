@@ -48,8 +48,8 @@ def parse_args():
     parser.add_argument(
         "--solver",
         choices=SOLVERS,
-        default="scipy",
-        help="Linear programming backend used inside each optimization window.",
+        default="gurobi",
+        help="Linear programming backend used inside each optimization window; gurobi.",
     )
     parser.add_argument(
         "--commit-hours",
