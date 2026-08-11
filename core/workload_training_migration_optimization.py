@@ -55,7 +55,7 @@ EUROPEAN_COUNTRIES = (
     "Switzerland",
 )
 
-MIGRATION_CONSTRAINTS = ("global", "europe_only")
+MIGRATION_CONSTRAINTS = ("global", "europe_only", "country_only")
 SOLVE_MODES = ("auto", "monolithic", "windowed")
 SOLVERS = ("scipy", "gurobi")
 CAPACITY_TOLERANCE = 1e-3
@@ -672,6 +672,141 @@ def _solve_training_migration_windowed(
     }
 
 
+def _solve_training_migration_country_only(
+    baseline_training_load: np.ndarray,
+    capacity_limit: np.ndarray,
+    fixed_non_training_load: np.ndarray,
+    country_it_mw: np.ndarray,
+    resource_capacities: np.ndarray,
+    pue: np.ndarray,
+    hourly_emission_kg_per_mwh: np.ndarray,
+    hardware_config: HardwarePowerConfig,
+    delay_hours: int,
+    solve_mode: str,
+    commit_hours: int,
+    return_schedule: bool,
+    verbose: bool = False,
+    progress_prefix: str = "",
+    solver: str = "scipy",
+    linprog_options: Optional[Mapping[str, Union[bool, float, int]]] = None,
+    gurobi_options: Optional[Mapping[str, Union[bool, float, int, str]]] = None,
+):
+    n_countries = baseline_training_load.shape[0]
+    destination_dtype = np.int32
+    scheduled_training_load = np.zeros_like(baseline_training_load)
+    schedule_frames = []
+    total_objective = 0.0
+    total_variables = 0
+    total_windows = 0
+
+    residual_capacity = capacity_limit - fixed_non_training_load
+    min_residual = residual_capacity.min()
+    if min_residual < -CAPACITY_TOLERANCE:
+        idx = np.unravel_index(np.argmin(residual_capacity), residual_capacity.shape)
+        raise ValueError(
+            "Fixed non-training workload exceeds capacity before country-only training migration: "
+            f"country/resource/hour index={idx}, residual={min_residual:.6g}."
+        )
+    residual_capacity = np.maximum(residual_capacity, 0.0)
+
+    marginal_it = _marginal_it_mwh_per_resource_hour(
+        country_it_mw=country_it_mw,
+        fixed_resource_load=fixed_non_training_load,
+        resource_capacities=resource_capacities,
+        config=hardware_config,
+    )
+    marginal_carbon_cost = (
+        marginal_it * pue[:, None, None] * hourly_emission_kg_per_mwh[:, None, :] / 1000.0
+    )
+
+    prefix = f"{progress_prefix}: " if progress_prefix else ""
+    _print_progress(
+        verbose,
+        f"{prefix}solving country-only time migration for {n_countries} countries.",
+    )
+
+    for country_id in range(n_countries):
+        country_source_load = baseline_training_load[country_id]
+        if not np.any(country_source_load > 1e-12):
+            continue
+
+        destination_ids = np.array([country_id], dtype=destination_dtype)
+        if solve_mode == "monolithic":
+            country_load, country_schedule, solver_info = _solve_training_migration_lp(
+                source_training_load=country_source_load,
+                movable_share=1.0,
+                destination_ids=destination_ids,
+                residual_capacity=residual_capacity,
+                marginal_carbon_cost=marginal_carbon_cost,
+                delay_hours=delay_hours,
+                return_schedule=return_schedule,
+                verbose=False,
+                progress_prefix=f"{progress_prefix} country {country_id}",
+                solver=solver,
+                linprog_options=linprog_options,
+                gurobi_options=gurobi_options,
+            )
+            country_windows = 1
+        else:
+            country_reservation = np.zeros_like(baseline_training_load)
+            country_reservation[country_id] = baseline_training_load[country_id]
+            country_load, country_schedule, solver_info = _solve_training_migration_windowed(
+                source_training_load=country_source_load,
+                movable_share=1.0,
+                destination_ids=destination_ids,
+                capacity_limit=capacity_limit,
+                fixed_for_optimization=fixed_non_training_load,
+                baseline_movable_load=country_reservation,
+                country_it_mw=country_it_mw,
+                resource_capacities=resource_capacities,
+                pue=pue,
+                hourly_emission_kg_per_mwh=hourly_emission_kg_per_mwh,
+                hardware_config=hardware_config,
+                delay_hours=delay_hours,
+                commit_hours=commit_hours,
+                return_schedule=return_schedule,
+                verbose=False,
+                progress_prefix=f"{progress_prefix} country {country_id}",
+                solver=solver,
+                linprog_options=linprog_options,
+                gurobi_options=gurobi_options,
+            )
+            country_windows = solver_info["windows"]
+
+        scheduled_training_load += country_load
+        total_objective += solver_info["objective"]
+        total_variables += solver_info["variables"]
+        total_windows += country_windows
+        if return_schedule and not country_schedule.empty:
+            schedule_frames.append(country_schedule)
+        _print_progress(
+            verbose,
+            f"{prefix}country-only solve {country_id + 1}/{n_countries}: "
+            f"{solver_info['variables']} variables.",
+        )
+
+    if return_schedule and schedule_frames:
+        schedule = pd.concat(schedule_frames, ignore_index=True)
+    else:
+        schedule = pd.DataFrame(
+            columns=[
+                "source_hour",
+                "execution_hour",
+                "execution_country_id",
+                "delay_hours",
+                "share",
+            ]
+        )
+
+    return scheduled_training_load, schedule, {
+        "status": 0,
+        "message": "Country-only training time migration completed.",
+        "objective": float(total_objective),
+        "variables": int(total_variables),
+        "windows": int(total_windows),
+    }
+
+
 def _country_records(
     scenario: str,
     year: int,
@@ -814,8 +949,10 @@ def run_training_migration_optimization(
     selected countries to receive movable training workload. ``"europe_only"``
     allows only European-origin training workload to move within Europe, while
     non-European training remains fixed in its origin country and source hour.
-    ``solve_mode="auto"`` uses a single LP for small problems and a rolling
-    window LP for full-year runs that would otherwise exceed solver limits.
+    ``"country_only"`` allows each country's training workload to move only
+    across time inside the same country. ``solve_mode="auto"`` uses a single LP
+    for small problems and a rolling window LP for full-year runs that would
+    otherwise exceed solver limits.
     """
     if years <= 0:
         raise ValueError("years must be positive.")
@@ -965,11 +1102,15 @@ def run_training_migration_optimization(
                 movable_share = float(training_origin_weights.sum())
                 destination_ids = np.arange(len(countries), dtype=np.int32)
                 fixed_training_load = np.zeros_like(baseline_training_load)
-            else:
+            elif migration_constraint == "europe_only":
                 movable_share = float(training_origin_weights[europe_ids].sum())
                 destination_ids = europe_ids
                 fixed_training_load = baseline_training_load.copy()
                 fixed_training_load[europe_ids] = 0.0
+            else:
+                movable_share = float(training_origin_weights.sum())
+                destination_ids = np.arange(len(countries), dtype=np.int32)
+                fixed_training_load = np.zeros_like(baseline_training_load)
             baseline_movable_load = np.maximum(baseline_training_load - fixed_training_load, 0.0)
 
             _print_progress(verbose, f"{progress_label}: building migration capacity constraints.")
@@ -987,16 +1128,32 @@ def run_training_migration_optimization(
             fixed_residual_capacity = np.maximum(fixed_residual_capacity, 0.0)
 
             active_sources = np.flatnonzero(np.any(source_training_load > 1e-12, axis=0))
-            estimated_variables = _estimate_variable_count(
-                active_sources=active_sources,
-                n_hours=source_training_load.shape[1],
-                n_destinations=len(destination_ids),
-                delay_hours=delay_hours,
-            )
+            if migration_constraint == "country_only":
+                country_variable_counts = [
+                    _estimate_variable_count(
+                        active_sources=np.flatnonzero(
+                            np.any(baseline_training_load[country_id] > 1e-12, axis=0)
+                        ),
+                        n_hours=source_training_load.shape[1],
+                        n_destinations=1,
+                        delay_hours=delay_hours,
+                    )
+                    for country_id in range(len(countries))
+                ]
+                estimated_variables = int(sum(country_variable_counts))
+                mode_decision_variables = max(country_variable_counts) if country_variable_counts else 0
+            else:
+                estimated_variables = _estimate_variable_count(
+                    active_sources=active_sources,
+                    n_hours=source_training_load.shape[1],
+                    n_destinations=len(destination_ids),
+                    delay_hours=delay_hours,
+                )
+                mode_decision_variables = estimated_variables
             selected_solve_mode = solve_mode
             if solve_mode == "auto":
                 selected_solve_mode = (
-                    "windowed" if estimated_variables > monolithic_variable_limit else "monolithic"
+                    "windowed" if mode_decision_variables > monolithic_variable_limit else "monolithic"
                 )
             _print_progress(
                 verbose,
@@ -1004,7 +1161,27 @@ def run_training_migration_optimization(
                 f"for {estimated_variables} estimated variables.",
             )
 
-            if selected_solve_mode == "monolithic":
+            if migration_constraint == "country_only":
+                movable_training_load, schedule, solver_info = _solve_training_migration_country_only(
+                    baseline_training_load=baseline_training_load,
+                    capacity_limit=capacity_limit,
+                    fixed_non_training_load=fixed_non_training_load,
+                    country_it_mw=country_it_mw,
+                    resource_capacities=resource_capacities,
+                    pue=pue,
+                    hourly_emission_kg_per_mwh=hourly_emission,
+                    hardware_config=hardware_config,
+                    delay_hours=delay_hours,
+                    solve_mode=selected_solve_mode,
+                    commit_hours=commit_hours,
+                    return_schedule=save_schedule,
+                    verbose=verbose,
+                    progress_prefix=progress_label,
+                    solver=solver,
+                    linprog_options=linprog_options,
+                    gurobi_options=gurobi_options,
+                )
+            elif selected_solve_mode == "monolithic":
                 _print_progress(verbose, f"{progress_label}: estimating marginal carbon costs.")
                 marginal_it = _marginal_it_mwh_per_resource_hour(
                     country_it_mw=country_it_mw,

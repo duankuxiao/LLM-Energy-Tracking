@@ -30,8 +30,10 @@ def parse_args():
     parser.add_argument(
         "--constraint",
         choices=MIGRATION_CONSTRAINTS,
-        default="europe_only",
-        help="global allows all modeled countries; europe_only only moves European training within Europe.",
+        default="country_only",
+        help=(
+            "global allows all modeled countries; europe_only only moves European training within Europe; country_only only moves each country's training across time inside that country."
+        ),
     )
     parser.add_argument(
         "--delay-hours",
@@ -54,7 +56,7 @@ def parse_args():
     parser.add_argument(
         "--commit-hours",
         type=int,
-        default=72,
+        default=168,
         help="Number of source hours committed per rolling-window LP.",
     )
     parser.add_argument(
