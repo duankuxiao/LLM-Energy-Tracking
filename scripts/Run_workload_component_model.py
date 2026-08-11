@@ -20,8 +20,8 @@ def parse_args():
         default=["Base"],
         choices=["Base", "Lift-Off", "High Efficiency", "Headwinds"],
     )
-    parser.add_argument("--years", type=int, default=5)
-    parser.add_argument("--year-start", type=int, default=2026)
+    parser.add_argument("--years", type=int, default=6)
+    parser.add_argument("--year-start", type=int, default=2025)
     parser.add_argument(
         "--workload-path",
         default=str(ROOT_DIR / "dataset" / "result_df_full_year_2020.pkl"),
@@ -52,7 +52,7 @@ def parse_args():
     parser.add_argument(
         "--capacity-quantile",
         type=float,
-        default=0.97,
+        default=0.96,
         help="Trace load quantile treated as the reference provisioned capacity.",
     )
     parser.add_argument(
@@ -60,12 +60,6 @@ def parse_args():
         type=float,
         default=1.0,
         help="Upper bound applied to trace-derived utilization before scaling to future capacity.",
-    )
-    parser.add_argument(
-        "--load-factor",
-        type=float,
-        default=0.50,
-        help="Average IT power as a fraction of installed IT capacity.",
     )
     parser.add_argument(
         "--hourly-carbon-dir",
@@ -123,7 +117,6 @@ def main():
         cpu_data_origin_fraction=args.cpu_data_origin_fraction,
         capacity_quantile=args.capacity_quantile,
         max_resource_utilization=args.max_resource_utilization,
-        data_center_average_load_factor=args.load_factor,
         hourly_carbon_factors_dir=None if args.disable_hourly_carbon else args.hourly_carbon_dir,
         hourly_carbon_scope=args.hourly_carbon_scope,
         hourly_carbon_fallback_to_annual=not args.strict_hourly_carbon,

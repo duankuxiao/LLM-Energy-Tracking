@@ -30,13 +30,13 @@ def parse_args():
     parser.add_argument(
         "--constraint",
         choices=MIGRATION_CONSTRAINTS,
-        default="global",
+        default="europe_only",
         help="global allows all modeled countries; europe_only only moves European training within Europe.",
     )
     parser.add_argument(
         "--delay-hours",
         type=int,
-        default=24,
+        default=72,
         help="Maximum allowed training delay in hours.",
     )
     parser.add_argument(
@@ -54,7 +54,7 @@ def parse_args():
     parser.add_argument(
         "--commit-hours",
         type=int,
-        default=24,
+        default=72,
         help="Number of source hours committed per rolling-window LP.",
     )
     parser.add_argument(
@@ -93,7 +93,7 @@ def parse_args():
     parser.add_argument(
         "--capacity-quantile",
         type=float,
-        default=0.97,
+        default=0.96,
         help="Trace load quantile treated as the reference provisioned capacity.",
     )
     parser.add_argument(
