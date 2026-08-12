@@ -84,7 +84,6 @@ if __name__ == '__main__':
     print(TOTAL_RATIO['China'])
     print(f"Total Matrix Shape: {TOTAL_CAPACITY.shape}")
     print(f"IT Matrix Shape: {IT_CAPACITY.shape}")
-    print(f"Non-IT Matrix Shape: {non_it_capacity.shape}")
 
     print(f"Validation (2030, Lift-Off, IT): {IT_CAPACITY[5, 1]}")
 
