@@ -11,3 +11,5 @@ Thumbs.db
 
 dataset/EM-estimate
 dataset/result_df_full_year_2020.pkl
+dataset/asi_opensource_pod_hourly
+dataset/asi_opensource_server_hourly
