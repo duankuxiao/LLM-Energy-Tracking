@@ -15,19 +15,16 @@ if str(ROOT_DIR) not in sys.path:
 
 from dataset.Factors import (  # noqa: E402
     PUE,
-    WUE,
-    carbon_emissions_factors_CP,
-    carbon_emissions_factors_NDC,
-    carbon_emissions_factors_NZ,
-    grid_water_factors_CP,
-    grid_water_factors_NDC,
-    grid_water_factors_NZ,
+    CF_CP,
+    CF_NDC,
+    CF_NZ,
 )
 from dataset.Installed_capacity_data import (  # noqa: E402
-    countries as DEFAULT_COUNTRIES,
-    it_capacity,
-    it_ratio,
-    total_ratio,
+    DEFAULT_COUNTRIES,
+    IT_CAPACITY,
+    IT_RATIO,
+    TOTAL_RATIO,
+    DEFAULT_AI_CAPACITY_FACTORS
 )
 
 
@@ -62,6 +59,7 @@ SCENARIO_COL_MAP = {
     "High Efficiency": 2,
     "Headwinds": 3,
 }
+
 HOURLY_CARBON_COUNTRY_DIRS = {
     "United_Kingdom": "Great Britain",
 }
@@ -175,14 +173,36 @@ def _progress_interval(total: int) -> int:
     return max(1, (total + 9) // 10)
 
 
+def _resolve_ai_capacity_factors(
+    year_start: int,
+    years: int,
+    overrides: Optional[Mapping[int, float]],
+) -> Dict[int, float]:
+    """Resolve and validate the AI share applied to total data-centre IT capacity."""
+    source = DEFAULT_AI_CAPACITY_FACTORS if overrides is None else overrides
+    requested_years = range(year_start, year_start + years)
+    missing_years = [year for year in requested_years if year not in source]
+    if missing_years:
+        raise ValueError(f"Missing AI capacity factors for years: {missing_years}")
+
+    factors = {year: float(source[year]) for year in requested_years}
+    invalid = {
+        year: factor
+        for year, factor in factors.items()
+        if not np.isfinite(factor) or not (0 < factor <= 1)
+    }
+    if invalid:
+        raise ValueError(f"AI capacity factors must be finite and in (0, 1], got: {invalid}")
+    return factors
+
 
 def _policy_factors(renewable_energy_policy: str):
     if renewable_energy_policy == "CP":
-        return carbon_emissions_factors_CP, grid_water_factors_CP
+        return CF_CP
     if renewable_energy_policy == "NDC":
-        return carbon_emissions_factors_NDC, grid_water_factors_NDC
+        return CF_NDC
     if renewable_energy_policy == "NZ":
-        return carbon_emissions_factors_NZ, grid_water_factors_NZ
+        return CF_NZ
     raise ValueError("renewable_energy_policy must be one of: CP, NDC, NZ")
 
 
@@ -442,9 +462,9 @@ def _as_task_weight_table(
 ) -> np.ndarray:
     if task_weights is None:
         defaults = {
-            "training": it_ratio,
-            "inference": total_ratio,
-            "other": total_ratio,
+            "training": IT_RATIO,
+            "inference": TOTAL_RATIO,
+            "other": TOTAL_RATIO,
         }
         return np.stack([_normalize_weights(countries, defaults[task_type]) for task_type in TASK_TYPES])
 
@@ -961,12 +981,6 @@ def _allocate_energy_to_task_types(
     return allocation
 
 
-def _dlc_adjusted_wue(countries: Sequence[str], year_idx: int, dlc_rate_0: float, dlc_increase: float) -> np.ndarray:
-    dlc_rate = dlc_rate_0 * ((1 + dlc_increase) ** year_idx)
-    base_wue = np.array([WUE[country] for country in countries], dtype=float)
-    return base_wue * (1 - dlc_rate) + (base_wue - 0.137) * dlc_rate
-
-
 def run_workload_component_footprint(
     renewable_energy_policy: str,
     scenarios: Sequence[str],
@@ -977,7 +991,7 @@ def run_workload_component_footprint(
     ),
     server_profile_path: Optional[Union[str, Path]] = None,
     year_start: int = 2026,
-    output_dir: Union[str, Path] = ROOT_DIR / "results" / "workload_component_model",
+    output_dir: Union[str, Path] = ROOT_DIR / "results" / "m4_hourly_gpu_model",
     save_outputs: bool = True,
     verbose: bool = True,
     hardware_config: Optional[HardwarePowerConfig] = None,
@@ -990,8 +1004,7 @@ def run_workload_component_footprint(
     capacity_quantile: float = 0.96,
     max_resource_utilization: float = 1.0,
     pue_scale: float = 1.0,
-    dlc_rate_0: float = 0.05,
-    dlc_increase: float = 0.20,
+    ai_capacity_factors: Optional[Mapping[int, float]] = None,
     hourly_carbon_factors_dir: Optional[Union[str, Path]] = ROOT_DIR / "dataset" / "EM-estimate",
     hourly_carbon_scope: str = "direct",
     hourly_carbon_fallback_to_annual: bool = True,
@@ -1010,11 +1023,16 @@ def run_workload_component_footprint(
     """
     if years <= 0:
         raise ValueError("years must be positive.")
-    data_year_end = DATA_YEAR_START + it_capacity.shape[0] - 1
+    data_year_end = DATA_YEAR_START + IT_CAPACITY.shape[0] - 1
     if year_start < DATA_YEAR_START or year_start + years - 1 > data_year_end:
         raise ValueError(f"Requested years must be within {DATA_YEAR_START}-{data_year_end}.")
     if not (0 < max_resource_utilization <= 1):
         raise ValueError("max_resource_utilization must be in (0, 1].")
+    resolved_ai_capacity_factors = _resolve_ai_capacity_factors(
+        year_start=year_start,
+        years=years,
+        overrides=ai_capacity_factors,
+    )
 
     hardware_config = hardware_config or HardwarePowerConfig()
     hardware_config.validate()
@@ -1023,13 +1041,13 @@ def run_workload_component_footprint(
     for scenario in scenarios:
         if scenario not in SCENARIO_COL_MAP:
             raise ValueError(f"Unknown scenario '{scenario}'. Allowed: {list(SCENARIO_COL_MAP.keys())}")
-    unknown_countries = [country for country in countries if country not in it_ratio]
+    unknown_countries = [country for country in countries if country not in IT_RATIO]
     if unknown_countries:
         raise ValueError(f"Unknown countries: {unknown_countries}")
 
-    emission_factors, grid_water_factors = _policy_factors(renewable_energy_policy)
+    emission_factors = _policy_factors(renewable_energy_policy)
     origin_weights = _as_task_weight_table(countries, task_origin_weights)
-    country_share = np.array([float(it_ratio[country]) for country in countries], dtype=float)
+    country_share = np.array([float(IT_RATIO[country]) for country in countries], dtype=float)
 
     run_start = time.perf_counter()
     _print_progress(
@@ -1076,8 +1094,17 @@ def run_workload_component_footprint(
                 f"scenario={scenario}, year={year}.",
             )
             data_year_idx = year - DATA_YEAR_START
-            global_it_mw = float(it_capacity[data_year_idx, scenario_col]) * 1e3
+            total_data_center_global_it_mw = float(IT_CAPACITY[data_year_idx, scenario_col]) * 1e3
+            ai_capacity_factor = resolved_ai_capacity_factors[year]
+            global_it_mw = total_data_center_global_it_mw * ai_capacity_factor
+            total_data_center_country_it_mw = total_data_center_global_it_mw * country_share
             country_it_mw = global_it_mw * country_share
+            _print_progress(
+                verbose,
+                f"Calculation {calculation_index}/{calculation_count}: IT capacity "
+                f"{total_data_center_global_it_mw / 1e3:.3f} GW x "
+                f"AI factor {ai_capacity_factor:.6f} = {global_it_mw / 1e3:.3f} GW.",
+            )
             resource_capacities = _resource_capacity(country_it_mw, hardware_config)
             global_resource_capacity = resource_capacities.sum(axis=0)
             component_full_mw = _component_full_power(country_it_mw, hardware_config)
@@ -1124,17 +1151,13 @@ def run_workload_component_footprint(
             )
 
             pue = np.array([PUE[country][data_year_idx, scenario_col] for country in countries], dtype=float) * pue_scale
-            wue = _dlc_adjusted_wue(countries, data_year_idx, dlc_rate_0, dlc_increase)
             annual_emission_kg_per_mwh = np.array(
                 [emission_factors[country][data_year_idx] for country in countries],
                 dtype=float,
             )
-            grid_water_m3_per_mwh = np.array([grid_water_factors[country][data_year_idx] for country in countries])
 
             country_it_energy_mwh = component_it_energy_mwh.sum(axis=1)
             facility_energy_mwh = country_it_energy_mwh * pue
-            direct_water_m3 = facility_energy_mwh * wue
-            grid_water_m3 = facility_energy_mwh * grid_water_m3_per_mwh
             if hourly_carbon_factors_dir is None:
                 _print_progress(
                     verbose,
@@ -1199,16 +1222,14 @@ def run_workload_component_footprint(
                         "scenario": scenario,
                         "year": year,
                         "country": country,
+                        "total_data_center_it_mw": total_data_center_country_it_mw[country_id],
+                        "ai_capacity_factor": ai_capacity_factor,
                         "installed_it_mw": country_it_mw[country_id],
                         "it_energy_mwh": country_it_energy_mwh[country_id],
                         "facility_energy_mwh": facility_energy_mwh[country_id],
                         "power_twh": facility_energy_mwh[country_id] / 1e6,
                         "carbon_tco2": carbon_tco2[country_id],
                         "carbon_mtco2": carbon_tco2[country_id] / 1e6,
-                        "water_m3": direct_water_m3[country_id] + grid_water_m3[country_id],
-                        "water_million_m3": (direct_water_m3[country_id] + grid_water_m3[country_id]) / 1e6,
-                        "direct_water_m3": direct_water_m3[country_id],
-                        "grid_water_m3": grid_water_m3[country_id],
                         "avg_cpu_utilization": resource_utilization[country_id, RESOURCES.index("cpu")].mean(),
                         "avg_gpu_utilization": resource_utilization[country_id, RESOURCES.index("gpu")].mean(),
                         "avg_memory_utilization": resource_utilization[country_id, RESOURCES.index("memory")].mean(),
@@ -1370,7 +1391,7 @@ def run_workload_component_footprint(
 
     if verbose:
         totals = results["annual_summary"].groupby(["scenario", "year"], as_index=False)[
-            ["power_twh", "carbon_mtco2", "water_million_m3"]
+            ["power_twh", "carbon_mtco2"]
         ].sum()
         print(totals.to_string(index=False, float_format=lambda value: f"{value:.4f}"))
         if save_outputs:
