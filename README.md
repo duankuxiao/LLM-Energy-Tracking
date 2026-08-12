@@ -8,7 +8,7 @@
 
 项目的核心是由“时间分辨率 × 硬件功率模型”形成的 M1—M4 核算矩阵，用于识别年度平均核算造成的时间聚合偏差，以及传统 CPU 功率近似造成的 GPU 硬件表征偏差。
 
-> 当前论文与 M1—M4 模型聚焦电力消耗、负荷和碳排放。`Carbon_water_footprint.py` 是沿用的历史文件名，当前代码未在 M1—M4 中开展水足迹或 WUE 分析。
+> 当前论文与 M1—M4 模型聚焦电力消耗、负荷和碳排放，不开展水足迹或 WUE 分析。
 
 ## 核算模型
 
@@ -23,7 +23,7 @@
 
 ### M1：年度 CPU 模型
 
-`core/m1_annual_cpu_model.py` 调用 `core/Carbon_water_footprint.py` 中的 `AIFootprint` 算法，采用空闲功率率、最大功率率和综合利用率计算年度 IT 用电，再通过 PUE 转换为数据中心总用电，最后匹配 `dataset/Factors.py` 中的年度碳因子。
+`core/m1_annual_cpu_model.py` 调用 `core/past_research_data_center_energy_carbon_model.py` 中的过去研究核算方法，采用空闲功率率、最大功率率和综合利用率计算年度 IT 用电，再通过 PUE 转换为数据中心总用电，最后匹配 `dataset/Factors.py` 中的年度碳因子。
 
 M1 不引入小时任务负荷，也不区分 CPU、GPU、内存、存储等设备能耗组成。
 
@@ -124,7 +124,8 @@ M4 是比较 M1—M3 核算偏差时的高精度基准。
 ```text
 .
 ├── core/
-│   ├── Carbon_water_footprint.py       # 传统年度 CPU 风格能耗算法
+│   ├── past_research_data_center_energy_carbon_model.py
+│   │                                      # 过去研究中的能耗碳排放方法
 │   ├── m1_annual_cpu_model.py          # M1：年度 CPU + 年度碳因子
 │   ├── m2_hourly_carbon_cpu_model.py   # M2：年度 CPU + 小时碳因子
 │   ├── m3_annual_gpu_model.py          # M3：GPU 能耗 + 年度碳因子
@@ -361,4 +362,3 @@ M4 返回并可保存以下主要结果表：
 ## 许可证
 
 本项目代码采用 [MIT License](LICENSE)。外部数据集不自动适用本项目的软件许可证；Alibaba、IEA、Electricity Maps 及其他数据来源的使用、引用和再分发应分别遵循其原始许可与服务条款。
-

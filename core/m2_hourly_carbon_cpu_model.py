@@ -8,7 +8,9 @@ from typing import Dict, Mapping, Optional, Sequence, Union
 import numpy as np
 import pandas as pd
 
-from core.Carbon_water_footprint import AIFootprint
+from core.past_research_data_center_energy_carbon_model import (
+    calculate_past_research_energy_carbon,
+)
 from dataset.Factors import CF_CP, CF_NDC, CF_NZ
 from dataset.Installed_capacity_data import DEFAULT_AI_CAPACITY_FACTORS, DEFAULT_COUNTRIES
 
@@ -109,7 +111,7 @@ def run_m2_hourly_carbon_cpu_model(
     verbose: bool = True,
 ) -> Dict[str, pd.DataFrame]:
     """
-    Run M2 with ``AIFootprint`` annual energy and hourly carbon intensity.
+    Run M2 with past-research annual energy and hourly carbon intensity.
 
     M2 deliberately introduces neither task profiles nor component-level power.
     Each country-year's M1 annual facility energy is represented as constant
@@ -130,22 +132,18 @@ def run_m2_hourly_carbon_cpu_model(
     hourly_frames = []
 
     for scenario in scenarios:
-        raw = AIFootprint(
+        raw = calculate_past_research_energy_carbon(
             renewable_energy_policy=renewable_energy_policy,
-            scenarios=[scenario],
+            scenario=scenario,
             years=native_years,
             countries=countries,
             infer_ratio_by_country=infer_ratio_by_country,
             default_p_infer=default_p_infer,
-            year_start=DATA_YEAR_START,
             u_train=u_train,
             u_infer=u_infer,
             idle_power_rate=idle_power_rate,
             max_power_rate=max_power_rate,
             pue_scale=pue_scale,
-            save_outputs=False,
-            verbose=False,
-            return_results=True,
         )
         country_power = raw["country_power"].loc[requested_years, countries]
 
