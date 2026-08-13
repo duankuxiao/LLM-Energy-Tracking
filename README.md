@@ -25,11 +25,11 @@
 
 `core/m1_annual_cpu_model.py` 调用 `core/past_research_data_center_energy_carbon_model.py` 中的过去研究核算方法，采用空闲功率率、最大功率率和综合利用率计算年度 IT 用电，再通过 PUE 转换为数据中心总用电，最后匹配 `dataset/Factors.py` 中的年度碳因子。
 
-M1 不引入小时任务负荷，也不区分 CPU、GPU、内存、存储等设备能耗组成。
+M1 不引入小时任务负荷，也不区分 CPU、GPU、内存、存储等设备能耗组成。其年度简化模型使用训练、推理、其他和未分类四类统一任务口径；默认有效任务比例为训练 20%、推理 75%、其他 5%，未分类比例为 0。各任务继续采用传统利用率—功率系数计算，并输出任务年度能耗。
 
 ### M2：小时碳因子 CPU 模型
 
-`core/m2_hourly_carbon_cpu_model.py` 使用与 M1 完全相同的年度能耗算法，因此 M1 与 M2 的国家年度总用电量按设计保持一致。M2 不引入任务负荷和设备分项，而是将国家年度用电表示为恒定小时功率，再逐小时匹配电网碳强度。
+`core/m2_hourly_carbon_cpu_model.py` 使用与 M1 完全相同的年度任务分类和能耗算法，因此 M1 与 M2 的国家年度总用电量及任务能耗按设计保持一致。M2 不引入小时任务曲线和设备分项，而是将国家年度用电表示为恒定小时功率，再逐小时匹配电网碳强度。
 
 M2 用于隔离年度平均碳因子与小时级碳因子之间的时间聚合效应。
 
@@ -41,7 +41,7 @@ M2 用于隔离年度平均碳因子与小时级碳因子之间的时间聚合�
 
 ### M4：小时级 GPU 模型
 
-`core/m4_hourly_gpu_model.py` 是完整核算模型。它读取 GPU Pod 和服务器轨迹，构建训练、推理和其他任务的小时资源负载，计算各硬件组成的小时功率，通过 PUE 得到设施用电，再与国家小时碳强度逐时匹配。
+`core/m4_hourly_gpu_model.py` 是完整核算模型。它读取 GPU Pod 和服务器轨迹，构建训练、推理、其他和未分类任务的小时资源负载，计算各硬件组成的小时功率，通过 PUE 得到设施用电，再与国家小时碳强度逐时匹配。
 
 M4 是比较 M1—M3 核算偏差时的高精度基准。
 
@@ -91,7 +91,7 @@ M4 是比较 M1—M3 核算偏差时的高精度基准。
 - 官方项目入口：[Alibaba Cluster Trace Program](https://github.com/alibaba/clusterdata)；
 - 轨迹背景与系统说明：[Heterogeneity at Hyperscale: Characterization and Scheduling of Large Production AI Clusters at Alibaba](https://www.usenix.org/conference/osdi26/presentation/li-suyi)。
 
-模型读取 `asi_opensource_pod_hourly` 中的 CPU 请求与利用率、GPU 请求、GPU SM 利用率、GPU 显存使用、任务类型和运行状态等字段。公开轨迹不含完整的存储活动和主机内存容量，因此当前实现分别使用空闲存储功率和 CPU 加权的内存活动代理；这些假设会写入 M4 的轨迹容量来源输出。
+模型读取 `asi_opensource_pod_hourly` 中的 CPU 请求与利用率、GPU 请求、GPU SM 利用率、GPU 显存使用、任务类型和运行状态等字段。能耗边界默认纳入全部活跃 Pod：即使 `gpu_request == 0`，CPU-only Pod 的 CPU 和内存活动仍属于 AI 集群能耗。论文任务比例采用独立的严格筛选口径，仅统计论文时间窗口内具有 GPU 显存请求和有效 GPU 使用小时的已分类任务；该筛选不删除能耗边界内的 CPU-only 负载。`training` 保持为训练，在线与离线推理合并为推理，`dev` 与明确标注的 `other` 合并为其他，空值、`unknown` 及异常标签单列为 `unclassified`。未分类负荷保留在总能耗中，但不计入论文口径的已分类任务比例。公开轨迹不含完整的存储活动和主机内存容量，因此当前实现分别使用空闲存储功率和 CPU 加权的内存活动代理；这些假设会写入 M4 的轨迹容量来源输出。
 
 ### 年度碳因子与 PUE
 
@@ -297,8 +297,12 @@ result = run_workload_component_footprint(
 | `hourly_carbon_scope` | 小时碳强度口径 | `direct` 或 `life_cycle` |
 | `hourly_carbon_fallback_to_annual` | 小时数据缺失时是否回退到年度因子 | `True` |
 | `max_intervals` | 限制 GPU 轨迹读取小时数 | 默认读取全部轨迹 |
+| `default_p_infer` | M1/M2 默认推理任务比例 | `0.75` |
+| `default_p_other` | M1/M2 默认其他任务比例 | `0.05` |
+| `task_ratio_by_country` | M1/M2 国家级四类任务比例覆盖 | 默认不覆盖 |
+| `include_zero_gpu_pods` | M3/M4 是否把零 GPU 请求的 CPU-only Pod 纳入能耗边界 | `True`；设为 `False` 仅用于 GPU-bearing Pod 敏感性分析 |
 
-M1/M2 还允许调整训练和推理占比、利用率、空闲功率率与最大功率率；M3/M4 允许通过 `HardwarePowerConfig` 和 `Alibaba2026TraceConfig` 调整硬件功率与轨迹处理参数。
+M1/M2 还允许调整训练、推理和其他任务占比及利用率，以及空闲功率率与最大功率率；M3/M4 允许通过 `HardwarePowerConfig` 和 `Alibaba2026TraceConfig` 调整硬件功率与轨迹处理参数。
 
 ## 输出结果
 
@@ -307,12 +311,14 @@ M1/M2 还允许调整训练和推理占比、利用率、空闲功率率与最�
 ### M1
 
 - `M1_Country_Annual.csv`：国家年度用电和碳排放；
-- `M1_Global_Annual.csv`：全球年度汇总。
+- `M1_Global_Annual.csv`：全球年度汇总；
+- `M1_Country_TaskType_Energy.csv`：国家年度任务分类能耗和碳排放。
 
 ### M2
 
 - `M2_Country_Annual.csv`：国家年度用电和小时匹配后的碳排放；
 - `M2_Global_Annual.csv`：全球年度汇总；
+- `M2_Country_TaskType_Energy.csv`：国家年度任务分类能耗和小时匹配后的碳排放；
 - `M2_Country_Hourly.csv`：可选的国家逐小时结果。
 
 ### M3
@@ -326,11 +332,11 @@ M4 返回并可保存以下主要结果表：
 
 - `annual_summary`：国家年度能耗、碳排放和资源利用率；
 - `component_energy`：CPU、GPU、内存、存储和 IT 风扇分项能耗；
-- `task_type_energy`：训练、推理和其他任务能耗；
+- `task_type_energy`：训练、推理、其他和未分类任务能耗；
 - `task_demand` 与 `task_execution`：任务来源和执行地的资源小时；
 - `capacity_overflow`：资源容量溢出诊断；
 - `hourly_carbon`：可选的国家小时用电、碳因子和碳排放；
-- `workload_profile_summary`：轨迹工作负载汇总；
+- `workload_profile_summary`：轨迹工作负载汇总，同时报告全部任务占比、排除未分类后的 `used_gpu_hours` 占比，以及 Alibaba 论文复现窗口口径的验证占比；
 - `trace_resource_capacity`：轨迹容量估算及其来源。
 
 ### 单位

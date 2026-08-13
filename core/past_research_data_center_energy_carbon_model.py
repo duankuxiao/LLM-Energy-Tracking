@@ -9,6 +9,7 @@ import pandas as pd
 
 from dataset.Factors import CF_CP, CF_NDC, CF_NZ, PUE
 from dataset.Installed_capacity_data import IT_CAPACITY, IT_RATIO
+from core.task_model import TASK_TYPES, build_country_task_ratio_table
 
 
 DATA_YEAR_START = 2025
@@ -31,9 +32,12 @@ def calculate_past_research_energy_carbon(
     years: int,
     countries: Sequence[str],
     infer_ratio_by_country: Optional[Mapping[str, float]] = None,
-    default_p_infer: float = 0.7,
+    task_ratio_by_country: Optional[Mapping[str, Mapping[str, float]]] = None,
+    default_p_infer: float = 0.75,
+    default_p_other: float = 0.05,
     u_train: float = 0.8,
     u_infer: float = 0.5,
+    u_other: float = 0.5,
     idle_power_rate: float = 0.23,
     max_power_rate: float = 0.88,
     pue_scale: float = 1.0,
@@ -57,8 +61,13 @@ def calculate_past_research_energy_carbon(
         raise ValueError("renewable_energy_policy must be one of: CP, NDC, NZ")
     if not countries:
         raise ValueError("countries must not be empty.")
-    if not 0.0 <= float(default_p_infer) <= 1.0:
-        raise ValueError(f"default_p_infer must be in [0, 1], got {default_p_infer}")
+    for name, value in {
+        "u_train": u_train,
+        "u_infer": u_infer,
+        "u_other": u_other,
+    }.items():
+        if not 0.0 <= float(value) <= 1.0:
+            raise ValueError(f"{name} must be in [0, 1], got {value}")
     if not 0.0 <= idle_power_rate <= max_power_rate:
         raise ValueError("Power rates must satisfy 0 <= idle_power_rate <= max_power_rate.")
     if pue_scale <= 0:
@@ -69,25 +78,33 @@ def calculate_past_research_energy_carbon(
     if missing_countries:
         raise ValueError(f"Unknown countries: {missing_countries}")
 
-    p_infer = np.full(len(countries), float(default_p_infer), dtype=float)
-    if infer_ratio_by_country is not None:
-        country_index = {country: index for index, country in enumerate(countries)}
-        for country, value in infer_ratio_by_country.items():
-            if country not in country_index:
-                raise ValueError(f"infer_ratio_by_country contains unknown country '{country}'.")
-            value = float(value)
-            if not 0.0 <= value <= 1.0:
-                raise ValueError(f"Inference ratio for '{country}' must be in [0, 1], got {value}")
-            p_infer[country_index[country]] = value
-    p_train = 1.0 - p_infer
+    task_ratios = build_country_task_ratio_table(
+        countries=countries,
+        task_ratio_by_country=task_ratio_by_country,
+        infer_ratio_by_country=infer_ratio_by_country,
+        default_p_infer=default_p_infer,
+        default_p_other=default_p_other,
+    )
 
     year_index = np.arange(years, dtype=float)
     training_activity = 0.9 + (0.925 - 0.9) / years * year_index
     inference_activity = 0.5 + (0.7 - 0.5) / years * year_index
-    utilization = (
-        p_train[None, :] * u_train * training_activity[:, None]
-        + p_infer[None, :] * u_infer * inference_activity[:, None]
+    activity = np.stack(
+        [
+            training_activity,
+            inference_activity,
+            inference_activity,
+            inference_activity,
+        ],
+        axis=1,
     )
+    utilization_rates = np.array([u_train, u_infer, u_other, u_other], dtype=float)
+    task_utilization = (
+        task_ratios[None, :, :]
+        * activity[:, None, :]
+        * utilization_rates[None, None, :]
+    )
+    utilization = task_utilization.sum(axis=2)
 
     scenario_column = SCENARIO_COLUMN[scenario]
     global_it_capacity_mw = IT_CAPACITY[:years, scenario_column] * 1e3
@@ -98,11 +115,17 @@ def calculate_past_research_energy_carbon(
     maximum_power_mw = installed_it_capacity_mw * max_power_rate
     it_power_mw = idle_power_mw + (maximum_power_mw - idle_power_mw) * utilization
     it_energy_mwh = it_power_mw * 8760.0
+    task_it_power_mw = installed_it_capacity_mw[:, :, None] * (
+        idle_power_rate * task_ratios[None, :, :]
+        + (max_power_rate - idle_power_rate) * task_utilization
+    )
+    task_it_energy_mwh = task_it_power_mw * 8760.0
 
     pue = np.stack(
         [PUE[country][:years, scenario_column] for country in countries], axis=1
     ) * pue_scale
     facility_energy_mwh = it_energy_mwh * pue
+    task_facility_energy_mwh = task_it_energy_mwh * pue[:, :, None]
 
     carbon_factors = POLICY_CARBON_FACTORS[renewable_energy_policy]
     annual_carbon_tco2_per_mwh = np.stack(
@@ -110,8 +133,35 @@ def calculate_past_research_energy_carbon(
         axis=1,
     ) / 1000.0
     carbon_tco2 = facility_energy_mwh * annual_carbon_tco2_per_mwh
+    task_carbon_tco2 = (
+        task_facility_energy_mwh * annual_carbon_tco2_per_mwh[:, :, None]
+    )
 
     years_index = pd.Index(range(DATA_YEAR_START, DATA_YEAR_START + years), name="year")
+    task_records = []
+    for year_id, year in enumerate(years_index):
+        for country_id, country in enumerate(countries):
+            for task_type_id, task_type in enumerate(TASK_TYPES):
+                task_records.append(
+                    {
+                        "year": int(year),
+                        "country": country,
+                        "task_type": task_type,
+                        "task_ratio": task_ratios[country_id, task_type_id],
+                        "utilization_contribution": task_utilization[
+                            year_id, country_id, task_type_id
+                        ],
+                        "it_energy_mwh": task_it_energy_mwh[
+                            year_id, country_id, task_type_id
+                        ],
+                        "facility_energy_mwh": task_facility_energy_mwh[
+                            year_id, country_id, task_type_id
+                        ],
+                        "carbon_tco2": task_carbon_tco2[
+                            year_id, country_id, task_type_id
+                        ],
+                    }
+                )
     return {
         "country_power": pd.DataFrame(
             facility_energy_mwh / 1e6,
@@ -123,4 +173,5 @@ def calculate_past_research_energy_carbon(
             index=years_index,
             columns=countries,
         ),
+        "task_type_energy": pd.DataFrame.from_records(task_records),
     }

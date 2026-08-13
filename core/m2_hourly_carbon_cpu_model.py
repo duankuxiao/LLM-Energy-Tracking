@@ -94,9 +94,12 @@ def run_m2_hourly_carbon_cpu_model(
     countries: Optional[Sequence[str]] = None,
     year_start: int = 2026,
     infer_ratio_by_country: Optional[Dict[str, float]] = None,
-    default_p_infer: float = 0.7,
+    task_ratio_by_country: Optional[Mapping[str, Mapping[str, float]]] = None,
+    default_p_infer: float = 0.75,
+    default_p_other: float = 0.05,
     u_train: float = 0.8,
     u_infer: float = 0.5,
+    u_other: float = 0.5,
     idle_power_rate: float = 0.23,
     max_power_rate: float = 0.88,
     pue_scale: float = 1.0,
@@ -113,10 +116,12 @@ def run_m2_hourly_carbon_cpu_model(
     """
     Run M2 with past-research annual energy and hourly carbon intensity.
 
-    M2 deliberately introduces neither task profiles nor component-level power.
+    M2 deliberately introduces neither hourly task profiles nor component-level power.
     Each country-year's M1 annual facility energy is represented as constant
     hourly power, and those hourly MWh are matched to hourly grid factors.
-    Therefore M1 and M2 have exactly the same annual energy by construction.
+    Annual energy is allocated to the shared task taxonomy with the same
+    simplified coefficients as M1. Therefore M1 and M2 have exactly the same
+    annual energy and task energy by construction.
     """
     if years <= 0:
         raise ValueError("years must be positive.")
@@ -129,6 +134,7 @@ def run_m2_hourly_carbon_cpu_model(
     capacity_factors = _resolve_ai_capacity_factors(requested_years, ai_capacity_factors)
     native_years = year_end - DATA_YEAR_START + 1
     annual_records = []
+    task_records = []
     hourly_frames = []
 
     for scenario in scenarios:
@@ -138,14 +144,18 @@ def run_m2_hourly_carbon_cpu_model(
             years=native_years,
             countries=countries,
             infer_ratio_by_country=infer_ratio_by_country,
+            task_ratio_by_country=task_ratio_by_country,
             default_p_infer=default_p_infer,
+            default_p_other=default_p_other,
             u_train=u_train,
             u_infer=u_infer,
+            u_other=u_other,
             idle_power_rate=idle_power_rate,
             max_power_rate=max_power_rate,
             pue_scale=pue_scale,
         )
         country_power = raw["country_power"].loc[requested_years, countries]
+        raw_task_energy = raw["task_type_energy"]
 
         for year in requested_years:
             for country in countries:
@@ -165,6 +175,7 @@ def run_m2_hourly_carbon_cpu_model(
                 )
                 hourly_carbon_tco2 = hourly_energy_mwh * carbon_factors / 1000.0
                 carbon_tco2 = float(hourly_carbon_tco2.sum())
+                mean_carbon_factor = float(carbon_factors.mean())
 
                 annual_records.append(
                     {
@@ -186,6 +197,40 @@ def run_m2_hourly_carbon_cpu_model(
                         "carbon_factor_source": factor_source,
                     }
                 )
+
+                country_task_energy = raw_task_energy[
+                    (raw_task_energy["year"] == year)
+                    & (raw_task_energy["country"] == country)
+                ]
+                for task_row in country_task_energy.itertuples(index=False):
+                    task_facility_energy_mwh = (
+                        float(task_row.facility_energy_mwh) * capacity_factors[year]
+                    )
+                    task_carbon_tco2 = (
+                        task_facility_energy_mwh * mean_carbon_factor / 1000.0
+                    )
+                    task_records.append(
+                        {
+                            "model": MODEL_NAME,
+                            "scenario": scenario,
+                            "policy": renewable_energy_policy,
+                            "year": year,
+                            "country": country,
+                            "task_type": task_row.task_type,
+                            "task_ratio": task_row.task_ratio,
+                            "utilization_contribution": task_row.utilization_contribution,
+                            "ai_capacity_factor": capacity_factors[year],
+                            "it_energy_mwh": (
+                                float(task_row.it_energy_mwh) * capacity_factors[year]
+                            ),
+                            "facility_energy_mwh": task_facility_energy_mwh,
+                            "facility_energy_twh": task_facility_energy_mwh / 1e6,
+                            "load_weighted_carbon_factor_kg_per_mwh": mean_carbon_factor,
+                            "carbon_tco2": task_carbon_tco2,
+                            "carbon_mtco2": task_carbon_tco2 / 1e6,
+                            "carbon_factor_source": factor_source,
+                        }
+                    )
 
                 if include_hourly_results or save_hourly_outputs:
                     hourly_frames.append(
@@ -210,6 +255,7 @@ def run_m2_hourly_carbon_cpu_model(
     hourly_carbon = (
         pd.concat(hourly_frames, ignore_index=True) if hourly_frames else pd.DataFrame()
     )
+    task_type_energy = pd.DataFrame.from_records(task_records)
     global_summary = (
         annual_summary.groupby(["model", "scenario", "policy", "year"], as_index=False)[
             ["facility_energy_mwh", "power_twh", "carbon_tco2", "carbon_mtco2"]
@@ -221,6 +267,9 @@ def run_m2_hourly_carbon_cpu_model(
         output_path.mkdir(parents=True, exist_ok=True)
         annual_summary.to_csv(output_path / "M2_Country_Annual.csv", index=False)
         global_summary.to_csv(output_path / "M2_Global_Annual.csv", index=False)
+        task_type_energy.to_csv(
+            output_path / "M2_Country_TaskType_Energy.csv", index=False
+        )
         if save_hourly_outputs:
             hourly_carbon.to_csv(output_path / "M2_Country_Hourly.csv", index=False)
 
@@ -232,6 +281,7 @@ def run_m2_hourly_carbon_cpu_model(
     return {
         "annual_summary": annual_summary,
         "global_summary": global_summary,
+        "task_type_energy": task_type_energy,
         "hourly_carbon": hourly_carbon if include_hourly_results else pd.DataFrame(),
     }
 

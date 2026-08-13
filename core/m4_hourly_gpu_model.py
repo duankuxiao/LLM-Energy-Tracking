@@ -26,15 +26,15 @@ from dataset.Installed_capacity_data import (  # noqa: E402
     TOTAL_RATIO,
     DEFAULT_AI_CAPACITY_FACTORS
 )
+from core.task_model import TASK_TYPES, task_type_ids  # noqa: E402
 
 
 ALIBABA_2026_POD_TABLE = "asi_opensource_pod_hourly"
 ALIBABA_2026_SERVER_TABLE = "asi_opensource_server_hourly"
 ALIBABA_2026_PARTITION_RE = re.compile(r"day=(?P<day>\d+)/hour=(?P<hour>\d+)")
+ALIBABA_2026_JOB_TYPE_START_DAY = 109
+ALIBABA_2026_JOB_TYPE_END_DAY = 184
 
-# Keep the downstream model compact while using the public 2026 labels directly:
-# training -> training; online/offline inference -> inference; everything else -> other.
-TASK_TYPES = ("training", "inference", "other")
 RESOURCES = ("cpu", "gpu", "memory", "storage")
 COMPONENTS = ("cpu", "gpu", "memory", "storage", "it_fan")
 DATA_YEAR_START = 2025
@@ -44,6 +44,7 @@ POD_PROFILE_COLUMNS = (
     "state_public",
     "job_type_public",
     "gpu_request",
+    "gpu_mem_request",
     "used_gpu_hours",
     "avg_gpu_sm_util",
     "avg_gpu_mem_gib",
@@ -81,6 +82,8 @@ class Alibaba2026TraceConfig:
     """Controls conversion of the public Alibaba GPU v2026 trace into model loads."""
 
     trace_anchor_year: int = 2001
+    # CPU-only pods still consume CPU and memory energy inside the AI cluster.
+    # The paper-validation task mix applies its own GPU-only filter separately.
     include_zero_gpu_pods: bool = True
     active_states: tuple[str, ...] = ("Running",)
     cap_gpu_sm_by_request: bool = True
@@ -465,12 +468,16 @@ def _as_task_weight_table(
             "training": IT_RATIO,
             "inference": TOTAL_RATIO,
             "other": TOTAL_RATIO,
+            "unclassified": TOTAL_RATIO,
         }
         return np.stack([_normalize_weights(countries, defaults[task_type]) for task_type in TASK_TYPES])
 
     table = []
     for task_type in TASK_TYPES:
         if task_type not in task_weights:
+            if task_type == "unclassified":
+                table.append(_normalize_weights(countries, TOTAL_RATIO))
+                continue
             raise ValueError(f"Missing weights for task type '{task_type}'.")
         table.append(_normalize_weights(countries, task_weights[task_type]))
     return np.stack(table)
@@ -519,15 +526,7 @@ def _to_numeric_array(df: pd.DataFrame, column: str) -> np.ndarray:
 
 
 def _map_public_job_type(values: pd.Series) -> np.ndarray:
-    mapped = values.fillna("unknown").astype(str).map(
-        {
-            "training": "training",
-            "online_inference": "inference",
-            "offline_inference": "inference",
-        }
-    ).fillna("other")
-    id_map = {name: idx for idx, name in enumerate(TASK_TYPES)}
-    return mapped.map(id_map).to_numpy(dtype=np.int64)
+    return task_type_ids(values)
 
 
 def _server_trace_capacity(
@@ -630,6 +629,7 @@ def build_workload_profile(
     pod_hour_counts = np.zeros((len(TASK_TYPES),), dtype=np.int64)
     source_used_gpu_hours = np.zeros((len(TASK_TYPES),), dtype=np.float64)
     source_gpu_memory_gib_hours = np.zeros((len(TASK_TYPES),), dtype=np.float64)
+    paper_validation_used_gpu_hours = np.zeros((len(TASK_TYPES),), dtype=np.float64)
 
     progress_interval = _progress_interval(len(pod_files_to_process))
     for file_index, (day, hour, path) in enumerate(pod_files_to_process, start=1):
@@ -649,24 +649,47 @@ def build_workload_profile(
         if df.empty:
             continue
 
-        task_type_ids = _map_public_job_type(df["job_type_public"])
+        mapped_task_type_ids = _map_public_job_type(df["job_type_public"])
         state = df["state_public"].fillna("").astype(str)
-        gpu_request = np.maximum(_to_numeric_array(df, "gpu_request"), 0.0)
-        used_gpu_hours = np.maximum(_to_numeric_array(df, "used_gpu_hours"), 0.0)
+        gpu_request = _to_numeric_array(df, "gpu_request")
+        gpu_mem_request = _to_numeric_array(df, "gpu_mem_request")
+        used_gpu_hours = _to_numeric_array(df, "used_gpu_hours")
         gpu_sm = _to_numeric_array(df, "avg_gpu_sm_util")
         gpu_mem = _to_numeric_array(df, "avg_gpu_mem_gib")
-        cpu_request = np.maximum(_to_numeric_array(df, "cpu_request_cores"), 0.0)
+        cpu_request = _to_numeric_array(df, "cpu_request_cores")
         cpu_request_util = _to_numeric_array(df, "avg_cpu_request_util")
         memory_util = _to_numeric_array(df, "avg_memory_util")
 
+        if ALIBABA_2026_JOB_TYPE_START_DAY <= day <= ALIBABA_2026_JOB_TYPE_END_DAY:
+            paper_valid = (
+                np.isfinite(gpu_mem_request)
+                & (gpu_mem_request > 0)
+                & np.isfinite(used_gpu_hours)
+                & (mapped_task_type_ids != TASK_TYPES.index("unclassified"))
+            )
+            if np.any(paper_valid):
+                paper_validation_used_gpu_hours += np.bincount(
+                    mapped_task_type_ids[paper_valid],
+                    weights=np.maximum(used_gpu_hours[paper_valid], 0.0),
+                    minlength=len(TASK_TYPES),
+                )
+
         # NaN utilization means no measured activity for the corresponding driver.
+        gpu_request = np.where(
+            np.isfinite(gpu_request), np.maximum(gpu_request, 0.0), 0.0
+        )
+        cpu_request = np.where(
+            np.isfinite(cpu_request), np.maximum(cpu_request, 0.0), 0.0
+        )
         gpu_sm = np.where(np.isfinite(gpu_sm), np.maximum(gpu_sm, 0.0), 0.0)
         gpu_mem = np.where(np.isfinite(gpu_mem), np.maximum(gpu_mem, 0.0), 0.0)
         cpu_request_util = np.where(
             np.isfinite(cpu_request_util), np.maximum(cpu_request_util, 0.0), 0.0
         )
         memory_util = np.where(np.isfinite(memory_util), np.maximum(memory_util, 0.0), 0.0)
-        used_gpu_hours = np.where(np.isfinite(used_gpu_hours), used_gpu_hours, 0.0)
+        used_gpu_hours = np.where(
+            np.isfinite(used_gpu_hours), np.maximum(used_gpu_hours, 0.0), 0.0
+        )
 
         active = state.isin(trace_config.active_states).to_numpy()
         active |= used_gpu_hours > 0
@@ -674,12 +697,14 @@ def build_workload_profile(
         active |= cpu_request_util > 0
         # Standby GPU capacity is already represented by the component idle-power term.
         active &= ~state.eq("Standby").to_numpy()
+        # This optional sensitivity boundary excludes CPU-only pods. It must not
+        # affect the separate paper-validation task-mix sample constructed above.
         if not trace_config.include_zero_gpu_pods:
             active &= gpu_request > 0
         if not np.any(active):
             continue
 
-        task_type_ids = task_type_ids[active]
+        mapped_task_type_ids = mapped_task_type_ids[active]
         gpu_request = gpu_request[active]
         used_gpu_hours = used_gpu_hours[active]
         gpu_sm = gpu_sm[active]
@@ -705,16 +730,16 @@ def build_workload_profile(
             storage_activity,
         )
 
-        pod_hour_counts += np.bincount(task_type_ids, minlength=len(TASK_TYPES))
+        pod_hour_counts += np.bincount(mapped_task_type_ids, minlength=len(TASK_TYPES))
         source_used_gpu_hours += np.bincount(
-            task_type_ids, weights=used_gpu_hours, minlength=len(TASK_TYPES)
+            mapped_task_type_ids, weights=used_gpu_hours, minlength=len(TASK_TYPES)
         )
         source_gpu_memory_gib_hours += np.bincount(
-            task_type_ids, weights=gpu_mem, minlength=len(TASK_TYPES)
+            mapped_task_type_ids, weights=gpu_mem, minlength=len(TASK_TYPES)
         )
         for resource_id, values in enumerate(resource_values):
             load[:, resource_id, pos] += np.bincount(
-                task_type_ids, weights=values, minlength=len(TASK_TYPES)
+                mapped_task_type_ids, weights=values, minlength=len(TASK_TYPES)
             )
 
     total_load = load.sum(axis=0)
@@ -765,13 +790,45 @@ def build_workload_profile(
     trace_capacity = np.maximum(trace_capacity, 1e-12)
     resource_hours = load.sum(axis=2) * interval_hours
     annualization = 8760.0 / (n_intervals * interval_hours)
+    total_pod_hour_rows = int(pod_hour_counts.sum())
+    total_source_used_gpu_hours = float(source_used_gpu_hours.sum())
+    classified_source_used_gpu_hours = float(
+        source_used_gpu_hours[: TASK_TYPES.index("unclassified")].sum()
+    )
+    paper_validation_total = float(paper_validation_used_gpu_hours.sum())
     summary_records = []
     for task_type_id, task_type in enumerate(TASK_TYPES):
         summary_records.append(
             {
                 "task_type": task_type,
+                "is_classified": task_type != "unclassified",
                 "pod_hour_rows": int(pod_hour_counts[task_type_id]),
+                "pod_hour_rows_share_all": (
+                    float(pod_hour_counts[task_type_id]) / total_pod_hour_rows
+                    if total_pod_hour_rows > 0
+                    else 0.0
+                ),
                 "source_used_gpu_hours": float(source_used_gpu_hours[task_type_id]),
+                "source_used_gpu_hours_share_all": (
+                    float(source_used_gpu_hours[task_type_id]) / total_source_used_gpu_hours
+                    if total_source_used_gpu_hours > 0
+                    else 0.0
+                ),
+                "source_used_gpu_hours_share_classified": (
+                    float(source_used_gpu_hours[task_type_id])
+                    / classified_source_used_gpu_hours
+                    if task_type != "unclassified" and classified_source_used_gpu_hours > 0
+                    else np.nan
+                ),
+                "paper_validation_used_gpu_hours": float(
+                    paper_validation_used_gpu_hours[task_type_id]
+                ),
+                "paper_validation_used_gpu_hours_share_classified": (
+                    float(paper_validation_used_gpu_hours[task_type_id])
+                    / paper_validation_total
+                    if task_type != "unclassified" and paper_validation_total > 0
+                    else np.nan
+                ),
                 "source_gpu_memory_gib_hours": float(source_gpu_memory_gib_hours[task_type_id]),
                 "cpu_core_hours": float(resource_hours[task_type_id, RESOURCES.index("cpu")]),
                 "gpu_sm_equivalent_hours": float(resource_hours[task_type_id, RESOURCES.index("gpu")]),
@@ -871,6 +928,7 @@ def _build_execution_weights(
         other_origin_fraction * origin_weights[TASK_TYPES.index("other")]
         + (1 - other_origin_fraction) * capacity_weight
     )
+    weights[TASK_TYPES.index("unclassified")] = capacity_weight
     weights = weights / weights.sum(axis=1, keepdims=True)
     return weights
 
@@ -968,7 +1026,13 @@ def _allocate_energy_to_task_types(
             if annual_driver.sum() > 0:
                 fallback = annual_driver / annual_driver.sum()
             else:
-                fallback = np.full((len(TASK_TYPES),), 1 / len(TASK_TYPES))
+                aggregate_activity = country_type_resource_load[:, country_id].sum(
+                    axis=(1, 2)
+                )
+                if aggregate_activity.sum() > 0:
+                    fallback = aggregate_activity / aggregate_activity.sum()
+                else:
+                    fallback = np.full((len(TASK_TYPES),), 1 / len(TASK_TYPES))
 
             shares = np.repeat(fallback[:, None], local_driver.shape[1], axis=1)
             active = total_driver > 0

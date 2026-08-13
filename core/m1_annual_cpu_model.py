@@ -42,9 +42,12 @@ def run_m1_annual_cpu_model(
     countries: Optional[Sequence[str]] = None,
     year_start: int = 2026,
     infer_ratio_by_country: Optional[Dict[str, float]] = None,
-    default_p_infer: float = 0.7,
+    task_ratio_by_country: Optional[Mapping[str, Mapping[str, float]]] = None,
+    default_p_infer: float = 0.75,
+    default_p_other: float = 0.05,
     u_train: float = 0.8,
     u_infer: float = 0.5,
+    u_other: float = 0.5,
     idle_power_rate: float = 0.23,
     max_power_rate: float = 0.88,
     pue_scale: float = 1.0,
@@ -58,7 +61,9 @@ def run_m1_annual_cpu_model(
 
     M1 uses the traditional CPU-style utilization--power relationship and the
     annual country carbon factors applied by the baseline method. No
-    task-level time series or IT-component breakdown is introduced.
+    task-level time series or IT-component breakdown is introduced. Annual
+    energy is nevertheless allocated to the shared training, inference, other,
+    and unclassified taxonomy using the same simplified coefficients.
 
     The baseline method is evaluated from its native 2025 data origin and then
     sliced to the requested years. Its linear annual results are multiplied by
@@ -76,6 +81,7 @@ def run_m1_annual_cpu_model(
     capacity_factors = _resolve_ai_capacity_factors(requested_years, ai_capacity_factors)
     native_years = year_end - DATA_YEAR_START + 1
     annual_frames = []
+    task_frames = []
 
     for scenario in scenarios:
         raw = calculate_past_research_energy_carbon(
@@ -84,9 +90,12 @@ def run_m1_annual_cpu_model(
             years=native_years,
             countries=countries,
             infer_ratio_by_country=infer_ratio_by_country,
+            task_ratio_by_country=task_ratio_by_country,
             default_p_infer=default_p_infer,
+            default_p_other=default_p_other,
             u_train=u_train,
             u_infer=u_infer,
+            u_other=u_other,
             idle_power_rate=idle_power_rate,
             max_power_rate=max_power_rate,
             pue_scale=pue_scale,
@@ -121,6 +130,24 @@ def run_m1_annual_cpu_model(
                 )
         annual_frames.append(pd.DataFrame.from_records(records))
 
+        task_type_energy = raw["task_type_energy"]
+        task_type_energy = task_type_energy[
+            task_type_energy["year"].isin(requested_years)
+        ].copy()
+        task_type_energy.insert(0, "policy", renewable_energy_policy)
+        task_type_energy.insert(0, "scenario", scenario)
+        task_type_energy.insert(0, "model", MODEL_NAME)
+        task_type_energy["ai_capacity_factor"] = task_type_energy["year"].map(
+            capacity_factors
+        )
+        for column in ("it_energy_mwh", "facility_energy_mwh", "carbon_tco2"):
+            task_type_energy[column] *= task_type_energy["ai_capacity_factor"]
+        task_type_energy["facility_energy_twh"] = (
+            task_type_energy["facility_energy_mwh"] / 1e6
+        )
+        task_type_energy["carbon_mtco2"] = task_type_energy["carbon_tco2"] / 1e6
+        task_frames.append(task_type_energy)
+
     columns = [
         "model",
         "scenario",
@@ -144,19 +171,29 @@ def run_m1_annual_cpu_model(
             ["facility_energy_mwh", "power_twh", "carbon_tco2", "carbon_mtco2"]
         ].sum()
     )
+    task_type_energy = (
+        pd.concat(task_frames, ignore_index=True) if task_frames else pd.DataFrame()
+    )
 
     if save_outputs:
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
         annual_summary.to_csv(output_path / "M1_Country_Annual.csv", index=False)
         global_summary.to_csv(output_path / "M1_Global_Annual.csv", index=False)
+        task_type_energy.to_csv(
+            output_path / "M1_Country_TaskType_Energy.csv", index=False
+        )
 
     if verbose:
         print(global_summary.to_string(index=False, float_format=lambda value: f"{value:.6f}"))
         if save_outputs:
             print(f"Saved M1 annual results to: {Path(output_dir).resolve()}")
 
-    return {"annual_summary": annual_summary, "global_summary": global_summary}
+    return {
+        "annual_summary": annual_summary,
+        "global_summary": global_summary,
+        "task_type_energy": task_type_energy,
+    }
 
 
 if __name__ == "__main__":
