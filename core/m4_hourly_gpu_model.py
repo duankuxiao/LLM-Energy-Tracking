@@ -1069,7 +1069,7 @@ def run_workload_component_footprint(
     max_resource_utilization: float = 1.0,
     pue_scale: float = 1.0,
     ai_capacity_factors: Optional[Mapping[int, float]] = None,
-    hourly_carbon_factors_dir: Optional[Union[str, Path]] = ROOT_DIR / "dataset" / "EM-estimate",
+    hourly_carbon_factors_dir: Optional[Union[str, Path]] = ROOT_DIR / "dataset" / "EM-CPNDCNZ",
     hourly_carbon_scope: str = "direct",
     hourly_carbon_fallback_to_annual: bool = True,
     save_hourly_outputs: bool = False,

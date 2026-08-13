@@ -128,7 +128,7 @@ def run_all_models(
     year_start: int = 2026,
     workload_profile_path: Union[str, Path] = ROOT_DIR / "dataset",
     server_profile_path: Optional[Union[str, Path]] = None,
-    hourly_carbon_factors_dir: Union[str, Path] = ROOT_DIR / "dataset" / "EM-estimate",
+    hourly_carbon_factors_dir: Union[str, Path] = ROOT_DIR / "dataset" / "EM-CPNDCNZ",
     hourly_carbon_scope: str = "direct",
     hourly_carbon_fallback_to_annual: bool = True,
     hardware_config: Optional[HardwarePowerConfig] = None,
@@ -304,7 +304,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--hourly-carbon-factors-dir",
         type=Path,
-        default=ROOT_DIR / "dataset" / "EM-estimate",
+        default=ROOT_DIR / "dataset" / "EM-CPNDCNZ",
     )
     parser.add_argument(
         "--hourly-carbon-scope", choices=("direct", "life_cycle"), default="direct"

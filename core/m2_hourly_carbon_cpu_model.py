@@ -104,7 +104,7 @@ def run_m2_hourly_carbon_cpu_model(
     max_power_rate: float = 0.88,
     pue_scale: float = 1.0,
     ai_capacity_factors: Optional[Mapping[int, float]] = None,
-    hourly_carbon_factors_dir: Union[str, Path] = ROOT_DIR / "dataset" / "EM-estimate",
+    hourly_carbon_factors_dir: Union[str, Path] = ROOT_DIR / "dataset" / "EM-CPNDCNZ",
     hourly_carbon_scope: str = "direct",
     hourly_carbon_fallback_to_annual: bool = True,
     include_hourly_results: bool = False,
