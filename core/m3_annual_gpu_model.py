@@ -10,6 +10,7 @@ import pandas as pd
 from core.m4_hourly_gpu_model import (
     Alibaba2026TraceConfig,
     HardwarePowerConfig,
+    WorkloadProfile,
     run_workload_component_footprint,
 )
 
@@ -41,6 +42,7 @@ def run_m3_annual_gpu_model(
     output_dir: Union[str, Path] = ROOT_DIR / "results" / "m3_annual_gpu",
     save_outputs: bool = True,
     verbose: bool = True,
+    workload_profile: Optional[WorkloadProfile] = None,
 ) -> Dict[str, pd.DataFrame]:
     """
     Run M3 using ``m4_hourly_gpu_model.py`` for annual energy.
@@ -48,7 +50,8 @@ def run_m3_annual_gpu_model(
     Hourly grid matching is explicitly disabled. Carbon is calculated inside
     the workload-component model from the policy-specific annual factors in
     ``dataset/Factors.py``. Only country and global annual tables are returned
-    and saved by this wrapper.
+    and saved by this wrapper. Pass a prebuilt ``workload_profile`` when M3
+    and M4 are run together to avoid reading the large trace dataset twice.
     """
     raw = run_workload_component_footprint(
         renewable_energy_policy=renewable_energy_policy,
@@ -74,6 +77,7 @@ def run_m3_annual_gpu_model(
         hourly_carbon_factors_dir=None,
         save_hourly_outputs=False,
         max_intervals=max_intervals,
+        workload_profile=workload_profile,
     )
 
     annual_summary = raw["annual_summary"].copy()

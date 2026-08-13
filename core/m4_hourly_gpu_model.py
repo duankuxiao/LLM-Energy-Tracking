@@ -1074,6 +1074,7 @@ def run_workload_component_footprint(
     hourly_carbon_fallback_to_annual: bool = True,
     save_hourly_outputs: bool = False,
     max_intervals: Optional[int] = None,
+    workload_profile: Optional[WorkloadProfile] = None,
 ) -> Dict[str, pd.DataFrame]:
     """
     Compute country-level AI footprint with a workload-driven component model.
@@ -1084,6 +1085,8 @@ def run_workload_component_footprint(
     Because the public trace covers about six months and has no calendar dates,
     annual energy/resource-hour outputs are annualized to 8760 hours and the
     relative hourly profile is repeated when matching hourly carbon factors.
+    A prebuilt ``workload_profile`` can be supplied so callers that run M3 and
+    M4 together only read the large trace dataset once.
     """
     if years <= 0:
         raise ValueError("years must be positive.")
@@ -1120,19 +1123,27 @@ def run_workload_component_footprint(
         f"years={year_start}-{year_start + years - 1}, countries={len(countries)}.",
     )
     profile_start = time.perf_counter()
-    _print_progress(verbose, "Building workload profile from trace partitions.")
-    profile = build_workload_profile(
-        workload_profile_path=workload_profile_path,
-        server_profile_path=server_profile_path,
-        capacity_quantile=capacity_quantile,
-        trace_config=trace_config,
-        max_intervals=max_intervals,
-        verbose=verbose,
-    )
+    if workload_profile is None:
+        _print_progress(verbose, "Building workload profile from trace partitions.")
+        profile = build_workload_profile(
+            workload_profile_path=workload_profile_path,
+            server_profile_path=server_profile_path,
+            capacity_quantile=capacity_quantile,
+            trace_config=trace_config,
+            max_intervals=max_intervals,
+            verbose=verbose,
+        )
+        profile_stage = "built"
+    else:
+        if not isinstance(workload_profile, WorkloadProfile):
+            raise TypeError("workload_profile must be a WorkloadProfile instance.")
+        profile = workload_profile
+        profile_stage = "reused"
+        _print_progress(verbose, "Reusing prebuilt workload profile; trace files are not read again.")
     annualization_factor = profile.annualization_factor_8760
     _print_progress(
         verbose,
-        f"Workload profile stage completed in {time.perf_counter() - profile_start:.1f}s; "
+        f"Workload profile {profile_stage} in {time.perf_counter() - profile_start:.1f}s; "
         f"annualization factor={annualization_factor:.4f}.",
     )
 

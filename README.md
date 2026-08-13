@@ -129,7 +129,8 @@ M4 是比较 M1—M3 核算偏差时的高精度基准。
 │   ├── m1_annual_cpu_model.py          # M1：年度 CPU + 年度碳因子
 │   ├── m2_hourly_carbon_cpu_model.py   # M2：年度 CPU + 小时碳因子
 │   ├── m3_annual_gpu_model.py          # M3：GPU 能耗 + 年度碳因子
-│   └── m4_hourly_gpu_model.py          # M4：GPU 能耗 + 小时碳因子
+│   ├── m4_hourly_gpu_model.py          # M4：GPU 能耗 + 小时碳因子
+│   └── task_model.py                   # M1—M4 共用任务分类口径
 ├── dataset/
 │   ├── Factors.py                      # 年度碳因子与 PUE
 │   ├── Installed_capacity_data.py      # 容量、国家份额与 AI 校准因子
@@ -140,6 +141,7 @@ M4 是比较 M1—M3 核算偏差时的高精度基准。
 ├── paper/                              # 论文大纲与研究设计
 ├── results/                            # 默认模型输出目录
 ├── scripts/                            # 分析和批处理脚本目录
+├── run.py                              # 一次运行 M1—M4 并生成对比汇总
 ├── LICENSE                             # MIT 许可证
 └── README.md
 ```
@@ -201,6 +203,30 @@ dataset/
 ## 快速开始
 
 所有命令均建议从项目根目录执行。
+
+### 一次运行 M1—M4 并汇总
+
+使用根目录下的统一入口运行四个 case：
+
+```powershell
+python run.py --policy CP --scenarios Base --year-start 2026 --years 5
+```
+
+多个情景可以同时传入；带空格的情景名需要加引号：
+
+```powershell
+python run.py --policy NDC --scenarios Base "Lift-Off" "High Efficiency"
+```
+
+统一入口先把 Alibaba GPU 轨迹构建为一个内存中的 `WorkloadProfile`，随后将同一个对象传给 M3 和 M4。因此两类大型 Parquet 轨迹只读取一次，M3 的年度碳因子计算和 M4 的小时碳因子计算仍分别执行。默认结果写入 `results/m1_m4_comparison/`。
+
+快速检查环境时可以限制轨迹小时数和国家范围：
+
+```powershell
+python run.py --countries USA --year-start 2026 --years 1 --max-intervals 24
+```
+
+`max_intervals` 会改变轨迹统计口径，只能用于调试，正式结果应省略该参数。运行 `python run.py --help` 可查看完整参数。
 
 ### 运行 M1
 
@@ -307,6 +333,17 @@ M1/M2 还允许调整训练、推理和其他任务占比及利用率，以及�
 ## 输出结果
 
 默认输出写入 `results/` 下的模型专属目录。
+
+### 统一运行与模型对比
+
+`run.py` 将每个模型的原始结果分别写入 `results/m1_m4_comparison/m1_annual_cpu/` 至 `m4_hourly_gpu/`，并在 `summary/` 中生成：
+
+- `All_Models_Country_Annual.csv`：M1—M4 国家年度统一长表；
+- `All_Models_Global_Annual.csv`：M1—M4 全球年度统一长表；
+- `Model_Comparison_Country_Annual.csv`：国家年度并排对比表；
+- `Model_Comparison_Global_Annual.csv`：全球年度并排对比表。
+
+并排对比表包含四个模型的用电量、负荷加权碳因子和碳排放，并为 M1—M3 提供相对 M4 的绝对差与百分比差。百分比按 `(模型结果 - M4) / M4 × 100%` 计算，正值表示高于 M4。
 
 ### M1
 
