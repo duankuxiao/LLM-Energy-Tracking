@@ -14,10 +14,9 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from dataset.Factors import (  # noqa: E402
+    CARBON_FACTORS,
     PUE,
-    CF_CP,
-    CF_NDC,
-    CF_NZ,
+    get_carbon_factor,
 )
 from dataset.Installed_capacity_data import (  # noqa: E402
     DEFAULT_COUNTRIES,
@@ -199,16 +198,6 @@ def _resolve_ai_capacity_factors(
     return factors
 
 
-def _policy_factors(renewable_energy_policy: str):
-    if renewable_energy_policy == "CP":
-        return CF_CP
-    if renewable_energy_policy == "NDC":
-        return CF_NDC
-    if renewable_energy_policy == "NZ":
-        return CF_NZ
-    raise ValueError("renewable_energy_policy must be one of: CP, NDC, NZ")
-
-
 def _standard_hourly_index(year: int, hours: int = 8760) -> pd.DatetimeIndex:
     return pd.date_range(start=f"{year}-01-01", periods=hours, freq="h", tz="UTC")
 
@@ -273,8 +262,6 @@ def _load_hourly_carbon_factors(
     countries: Sequence[str],
     renewable_energy_policy: str,
     year: int,
-    year_idx: int,
-    annual_emission_factors: Mapping[str, Sequence[float]],
     hourly_carbon_factors_dir: Union[str, Path],
     hourly_carbon_scope: str,
     hourly_carbon_fallback_to_annual: bool,
@@ -317,7 +304,11 @@ def _load_hourly_carbon_factors(
             continue
         if not hourly_carbon_fallback_to_annual:
             raise FileNotFoundError(f"No hourly carbon factors found for {country} {year}.")
-        factors[country_id] = float(annual_emission_factors[country][year_idx])
+        factors[country_id] = get_carbon_factor(
+            renewable_energy_policy,
+            country,
+            year,
+        )
 
     return reference_timestamps, factors, used_hourly
 
@@ -1112,7 +1103,8 @@ def run_workload_component_footprint(
     if unknown_countries:
         raise ValueError(f"Unknown countries: {unknown_countries}")
 
-    emission_factors = _policy_factors(renewable_energy_policy)
+    if renewable_energy_policy not in CARBON_FACTORS:
+        raise ValueError("renewable_energy_policy must be one of: CP, NDC, NZ")
     origin_weights = _as_task_weight_table(countries, task_origin_weights)
     country_share = np.array([float(IT_RATIO[country]) for country in countries], dtype=float)
 
@@ -1227,7 +1219,14 @@ def run_workload_component_footprint(
 
             pue = np.array([PUE[country][data_year_idx, scenario_col] for country in countries], dtype=float) * pue_scale
             annual_emission_kg_per_mwh = np.array(
-                [emission_factors[country][data_year_idx] for country in countries],
+                [
+                    get_carbon_factor(
+                        renewable_energy_policy,
+                        country,
+                        year,
+                    )
+                    for country in countries
+                ],
                 dtype=float,
             )
 
@@ -1249,8 +1248,6 @@ def run_workload_component_footprint(
                     countries=countries,
                     renewable_energy_policy=renewable_energy_policy,
                     year=year,
-                    year_idx=data_year_idx,
-                    annual_emission_factors=emission_factors,
                     hourly_carbon_factors_dir=hourly_carbon_factors_dir,
                     hourly_carbon_scope=hourly_carbon_scope,
                     hourly_carbon_fallback_to_annual=hourly_carbon_fallback_to_annual,

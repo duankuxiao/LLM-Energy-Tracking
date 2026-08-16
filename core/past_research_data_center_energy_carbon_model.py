@@ -7,7 +7,7 @@ from typing import Dict, Mapping, Optional, Sequence
 import numpy as np
 import pandas as pd
 
-from dataset.Factors import CF_CP, CF_NDC, CF_NZ, PUE
+from dataset.Factors import CARBON_FACTORS, PUE, get_carbon_factor
 from dataset.Installed_capacity_data import IT_CAPACITY, IT_RATIO
 from core.task_model import TASK_TYPES, build_country_task_ratio_table
 
@@ -19,13 +19,6 @@ SCENARIO_COLUMN = {
     "High Efficiency": 2,
     "Headwinds": 3,
 }
-POLICY_CARBON_FACTORS = {
-    "CP": CF_CP,
-    "NDC": CF_NDC,
-    "NZ": CF_NZ,
-}
-
-
 def calculate_past_research_energy_carbon(
     renewable_energy_policy: str,
     scenario: str,
@@ -57,7 +50,7 @@ def calculate_past_research_energy_carbon(
         raise ValueError(f"years must be within 1-{IT_CAPACITY.shape[0]}.")
     if scenario not in SCENARIO_COLUMN:
         raise ValueError(f"Unknown scenario '{scenario}'. Allowed: {list(SCENARIO_COLUMN)}")
-    if renewable_energy_policy not in POLICY_CARBON_FACTORS:
+    if renewable_energy_policy not in CARBON_FACTORS:
         raise ValueError("renewable_energy_policy must be one of: CP, NDC, NZ")
     if not countries:
         raise ValueError("countries must not be empty.")
@@ -127,10 +120,15 @@ def calculate_past_research_energy_carbon(
     facility_energy_mwh = it_energy_mwh * pue
     task_facility_energy_mwh = task_it_energy_mwh * pue[:, :, None]
 
-    carbon_factors = POLICY_CARBON_FACTORS[renewable_energy_policy]
-    annual_carbon_tco2_per_mwh = np.stack(
-        [np.asarray(carbon_factors[country][:years], dtype=float) for country in countries],
-        axis=1,
+    annual_carbon_tco2_per_mwh = np.array(
+        [
+            [
+                get_carbon_factor(renewable_energy_policy, country, year)
+                for country in countries
+            ]
+            for year in range(DATA_YEAR_START, DATA_YEAR_START + years)
+        ],
+        dtype=float,
     ) / 1000.0
     carbon_tco2 = facility_energy_mwh * annual_carbon_tco2_per_mwh
     task_carbon_tco2 = (

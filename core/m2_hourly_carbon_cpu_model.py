@@ -11,7 +11,7 @@ import pandas as pd
 from core.past_research_data_center_energy_carbon_model import (
     calculate_past_research_energy_carbon,
 )
-from dataset.Factors import CF_CP, CF_NDC, CF_NZ
+from dataset.Factors import get_carbon_factor
 from dataset.Installed_capacity_data import DEFAULT_AI_CAPACITY_FACTORS, DEFAULT_COUNTRIES
 
 
@@ -20,16 +20,6 @@ MODEL_NAME = "M2"
 DATA_YEAR_START = 2025
 DATA_YEAR_END = 2030
 HOURLY_CARBON_COUNTRY_DIRS = {"United_Kingdom": "Great Britain"}
-
-
-def _annual_factors(policy: str):
-    if policy == "CP":
-        return CF_CP
-    if policy == "NDC":
-        return CF_NDC
-    if policy == "NZ":
-        return CF_NZ
-    raise ValueError("renewable_energy_policy must be one of: CP, NDC, NZ")
 
 
 def _resolve_ai_capacity_factors(
@@ -82,7 +72,7 @@ def _read_hourly_carbon_factors(
 
     if not fallback_to_annual:
         raise FileNotFoundError(f"No hourly carbon factors found for {country} {policy} {year}.")
-    annual_factor = float(_annual_factors(policy)[country][year - DATA_YEAR_START])
+    annual_factor = get_carbon_factor(policy, country, year)
     timestamps = pd.date_range(f"{year}-01-01", periods=8760, freq="h", tz="UTC")
     return timestamps, np.full(8760, annual_factor, dtype=float), "annual_fallback"
 
