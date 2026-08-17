@@ -11,9 +11,11 @@ changes as M1 is progressively replaced by the M4 representation:
 4. hourly carbon matching instead of annual-average carbon factors.
 
 The four signed effects are calculated in the M1-to-M4 direction and must sum
-to the direct M4-minus-M1 difference.  The script evaluates the complete
-4-demand-scenario x 3-grid-policy space for 2026--2030, writes one Excel
-workbook with one worksheet per Figure 3 panel, and contains no plotting code.
+to the direct M4-minus-M1 difference.  All calculations are fixed to Base-CP
+for 2026--2030 and the default 24-country boundary.  The workbook also reports
+the peak/ramp information that an annual model cannot represent.  The script
+contains no plotting code and does not export intermediate calculation or
+validation tables.
 """
 
 from __future__ import annotations
@@ -43,8 +45,13 @@ from dataset.Installed_capacity_data import DEFAULT_COUNTRIES
 
 
 DEFAULT_OUTPUT = ROOT_DIR / "results" / "figure3_data.xlsx"
-DEFAULT_SCENARIOS = ("Base", "Lift-Off", "High Efficiency", "Headwinds")
-POLICIES = ("CP", "NDC", "NZ")
+FIGURE_SCENARIO = "Base"
+FIGURE_POLICY = "CP"
+FIGURE_YEAR_START = 2026
+FIGURE_YEAR_END = 2030
+FIGURE_YEARS = FIGURE_YEAR_END - FIGURE_YEAR_START + 1
+DETAIL_YEAR = 2030
+POLICIES = (FIGURE_POLICY,)
 MODEL_ORDER = ("M1", "M4")
 
 M1_VARIANT = "M1_baseline"
@@ -342,7 +349,8 @@ def _run_m4_variant(
     max_intervals: Optional[int],
     profile: WorkloadProfile,
     verbose: bool,
-) -> pd.DataFrame:
+    return_hourly: bool = False,
+) -> Union[pd.DataFrame, tuple[pd.DataFrame, pd.DataFrame]]:
     result = run_workload_component_footprint(
         renewable_energy_policy=policy,
         scenarios=[scenario],
@@ -362,12 +370,25 @@ def _run_m4_variant(
         max_intervals=max_intervals,
         workload_profile=profile,
     )
-    return _standardize_result(
+    annual = _standardize_result(
         result["annual_summary"],
         variant=variant,
         model="M4",
         policy=policy,
     )
+    if not return_hourly:
+        return annual
+
+    hourly = result["hourly_carbon"][[
+        "scenario",
+        "year",
+        "country",
+        "timestamp_utc",
+        "facility_energy_mwh",
+    ]].copy()
+    if hourly.empty:
+        raise AssertionError("The requested M4 hourly energy table is empty.")
+    return annual, hourly
 
 
 def _validate_variant_coverage(
@@ -417,8 +438,9 @@ def _collect_variant_results(
     max_intervals: Optional[int],
     profile: WorkloadProfile,
     verbose: bool,
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     all_frames: list[pd.DataFrame] = []
+    base_cp_hourly: Optional[pd.DataFrame] = None
     model_year_end = year_start + years - 1
 
     for policy in POLICIES:
@@ -454,7 +476,7 @@ def _collect_variant_results(
         flat_energy_frames.append(
             _run_m4_variant(
                 variant=MEAN_WORKLOAD_VARIANT,
-                policy="CP",
+                policy=FIGURE_POLICY,
                 scenario=scenario,
                 countries=countries,
                 year_start=year_start,
@@ -487,7 +509,7 @@ def _collect_variant_results(
             legacy_energy_frames.append(
                 _run_m4_variant(
                     variant=POWER_CONFIGURATION_VARIANT,
-                    policy="CP",
+                    policy=FIGURE_POLICY,
                     scenario=scenario,
                     countries=countries,
                     year_start=year,
@@ -532,7 +554,10 @@ def _collect_variant_results(
                     f"[figure3] Calculating full M4 for {scenario} x {policy}.",
                     flush=True,
                 )
-            m4_hourly = _run_m4_variant(
+            capture_hourly = (
+                policy == FIGURE_POLICY and scenario == FIGURE_SCENARIO
+            )
+            m4_output = _run_m4_variant(
                 variant=M4_VARIANT,
                 policy=policy,
                 scenario=scenario,
@@ -549,7 +574,16 @@ def _collect_variant_results(
                 max_intervals=max_intervals,
                 profile=profile,
                 verbose=False,
+                return_hourly=capture_hourly,
             )
+            if capture_hourly:
+                if not isinstance(m4_output, tuple):
+                    raise AssertionError("Base-CP M4 hourly output was not captured.")
+                m4_hourly, base_cp_hourly = m4_output
+            else:
+                if isinstance(m4_output, tuple):
+                    raise AssertionError("Unexpected hourly output for non-Base-CP run.")
+                m4_hourly = m4_output
             all_frames.append(
                 _derive_annual_carbon_variant(
                     m4_hourly,
@@ -570,10 +604,13 @@ def _collect_variant_results(
     )
     variant_order = pd.CategoricalDtype(VARIANT_ORDER, ordered=True)
     results["variant"] = results["variant"].astype(variant_order)
-    return results.sort_values(
+    if base_cp_hourly is None:
+        raise AssertionError("Base-CP is required for Figure 3 hourly diagnostics.")
+    sorted_results = results.sort_values(
         ["scenario", "policy", "year", "country", "variant"],
         ignore_index=True,
     )
+    return sorted_results, base_cp_hourly
 
 
 def _global_model_comparison(variant_results: pd.DataFrame) -> pd.DataFrame:
@@ -692,23 +729,66 @@ def _country_effect_decomposition(variant_results: pd.DataFrame) -> pd.DataFrame
     )
 
 
-def _annual_average_country_effects(effect_results: pd.DataFrame) -> pd.DataFrame:
-    keys = [
+def _annual_average_global_effects(effect_results: pd.DataFrame) -> pd.DataFrame:
+    """Sum the 24 countries by year, then average the annual bridge effects."""
+    annual_keys = [
         "scenario",
         "policy",
-        "country",
+        "year",
         "effect_order",
         "effect",
         "source_variant",
         "target_variant",
         "effect_definition",
     ]
-    averaged = effect_results.groupby(keys, as_index=False, sort=False).agg(
+    annual = effect_results.groupby(
+        annual_keys,
+        as_index=False,
+        sort=False,
+    ).agg(
+        countries_aggregated=("country", "nunique"),
+        source_facility_energy_mwh=("source_facility_energy_mwh", "sum"),
+        target_facility_energy_mwh=("target_facility_energy_mwh", "sum"),
+        energy_effect_mwh=("energy_effect_mwh", "sum"),
+        source_carbon_tco2=("source_carbon_tco2", "sum"),
+        target_carbon_tco2=("target_carbon_tco2", "sum"),
+        carbon_effect_tco2=("carbon_effect_tco2", "sum"),
+        m4_facility_energy_mwh=("m4_facility_energy_mwh", "sum"),
+        m4_carbon_tco2=("m4_carbon_tco2", "sum"),
+        total_m4_minus_m1_energy_mwh=(
+            "total_m4_minus_m1_energy_mwh",
+            "sum",
+        ),
+        total_m4_minus_m1_carbon_tco2=(
+            "total_m4_minus_m1_carbon_tco2",
+            "sum",
+        ),
+    )
+    country_counts = annual["countries_aggregated"].unique()
+    if len(country_counts) != 1:
+        raise AssertionError(
+            "Figure 3 bridge uses inconsistent country counts: "
+            f"{sorted(country_counts.tolist())}."
+        )
+
+    average_keys = [column for column in annual_keys if column != "year"]
+    averaged = annual.groupby(
+        average_keys,
+        as_index=False,
+        sort=False,
+    ).agg(
         year_start=("year", "min"),
         year_end=("year", "max"),
         years_averaged=("year", "nunique"),
-        annual_avg_source_facility_energy_mwh=("source_facility_energy_mwh", "mean"),
-        annual_avg_target_facility_energy_mwh=("target_facility_energy_mwh", "mean"),
+        countries_aggregated=("countries_aggregated", "min"),
+        annual_avg_source_facility_energy_mwh=(
+            "source_facility_energy_mwh",
+            "mean",
+        ),
+        annual_avg_target_facility_energy_mwh=(
+            "target_facility_energy_mwh",
+            "mean",
+        ),
         annual_avg_energy_effect_mwh=("energy_effect_mwh", "mean"),
         annual_avg_source_carbon_tco2=("source_carbon_tco2", "mean"),
         annual_avg_target_carbon_tco2=("target_carbon_tco2", "mean"),
@@ -737,7 +817,7 @@ def _annual_average_country_effects(effect_results: pd.DataFrame) -> pd.DataFram
         out=np.full(len(averaged), np.nan),
         where=averaged["annual_avg_m4_carbon_tco2"].to_numpy(dtype=float) != 0,
     )
-    bridge_keys = ["scenario", "policy", "country"]
+    bridge_keys = ["scenario", "policy"]
     averaged["sum_of_energy_effects_mwh"] = averaged.groupby(bridge_keys)[
         "annual_avg_energy_effect_mwh"
     ].transform("sum")
@@ -752,166 +832,380 @@ def _annual_average_country_effects(effect_results: pd.DataFrame) -> pd.DataFram
         averaged["sum_of_carbon_effects_tco2"]
         - averaged["annual_avg_total_m4_minus_m1_carbon_tco2"]
     )
-    averaged["country"] = [COUNTRY_ISO3[country] for country in averaged["country"]]
     return averaged.sort_values(
-        ["scenario", "policy", "country", "effect_order"],
+        ["scenario", "policy", "effect_order"],
         ignore_index=True,
     )
 
 
-def _country_m1_m4_comparison(variant_results: pd.DataFrame) -> pd.DataFrame:
-    keys = ["scenario", "policy", "year", "country"]
-    selected = variant_results[variant_results["variant"].isin((M1_VARIANT, M4_VARIANT))]
-    energy = selected.pivot(
-        index=keys, columns="variant", values="facility_energy_mwh"
-    ).reset_index()
-    carbon = selected.pivot(
-        index=keys, columns="variant", values="carbon_tco2"
-    ).reset_index()
-    result = energy.merge(carbon, on=keys, suffixes=("_energy", "_carbon"))
-    result = result.rename(
-        columns={
-            f"{M1_VARIANT}_energy": "m1_facility_energy_mwh",
-            f"{M4_VARIANT}_energy": "m4_facility_energy_mwh",
-            f"{M1_VARIANT}_carbon": "m1_carbon_tco2",
-            f"{M4_VARIANT}_carbon": "m4_carbon_tco2",
-        }
-    )
-    result["m1_vs_m4_energy_error_pct"] = _relative_difference(
-        result["m1_facility_energy_mwh"], result["m4_facility_energy_mwh"]
-    )
-    result["m1_vs_m4_carbon_error_pct"] = _relative_difference(
-        result["m1_carbon_tco2"], result["m4_carbon_tco2"]
-    )
-    result["m1_minus_m4_carbon_tco2"] = (
-        result["m1_carbon_tco2"] - result["m4_carbon_tco2"]
-    )
-    return result.sort_values(keys, ignore_index=True)
+def _power_metrics(hourly_power_mw: np.ndarray) -> dict[str, float]:
+    values = np.asarray(hourly_power_mw, dtype=float)
+    if values.ndim != 1 or len(values) == 0:
+        raise ValueError("Hourly power must be a non-empty one-dimensional array.")
+    if np.any(~np.isfinite(values)) or np.any(values < 0):
+        raise ValueError("Hourly power must be finite and non-negative.")
+
+    mean_power = float(values.mean())
+    differences = np.diff(values)
+    max_ramp_up = max(float(differences.max()), 0.0) if len(differences) else 0.0
+    max_ramp_down = min(float(differences.min()), 0.0) if len(differences) else 0.0
+    max_abs_ramp = float(np.abs(differences).max()) if len(differences) else 0.0
+    return {
+        "mean_power_mw": mean_power,
+        "peak_power_mw": float(values.max()),
+        "p99_power_mw": float(np.quantile(values, 0.99)),
+        "peak_to_mean_ratio": (
+            float(values.max() / mean_power) if mean_power > 0 else np.nan
+        ),
+        "max_ramp_up_mw_per_h": max_ramp_up,
+        "max_ramp_down_mw_per_h": max_ramp_down,
+        "max_abs_ramp_mw_per_h": max_abs_ramp,
+        "max_abs_ramp_pct_of_mean": (
+            max_abs_ramp * 100.0 / mean_power if mean_power > 0 else np.nan
+        ),
+    }
 
 
-def _failure_risk_table(
-    country_comparison: pd.DataFrame,
-    failure_thresholds_pct: Sequence[float],
+def _peak_ramp_table(
+    variant_results: pd.DataFrame,
+    base_cp_hourly: pd.DataFrame,
 ) -> pd.DataFrame:
-    records = []
-    group_keys = ["scenario", "policy", "year"]
-    for key, group in country_comparison.groupby(group_keys, sort=True):
-        scenario, policy, year = key
-        carbon_error = group["m1_vs_m4_carbon_error_pct"]
-        energy_error = group["m1_vs_m4_energy_error_pct"]
-        absolute_carbon_error = carbon_error.abs()
-        absolute_energy_error = energy_error.abs()
-        for threshold in failure_thresholds_pct:
-            carbon_failed = absolute_carbon_error > threshold
-            energy_failed = absolute_energy_error > threshold
-            either_failed = carbon_failed | energy_failed
-            country_count = len(group)
+    """Return plotting data for the annual-mean and hourly M4 load profiles."""
+    is_base_cp = (variant_results["scenario"] == FIGURE_SCENARIO) & (
+        variant_results["policy"] == FIGURE_POLICY
+    )
+    annual = variant_results.loc[
+        is_base_cp
+        & variant_results["variant"].isin((MEAN_WORKLOAD_VARIANT, M4_VARIANT)),
+        ["variant", "year", "country", "facility_energy_mwh"],
+    ].copy()
+    hourly = base_cp_hourly.copy()
+    hourly["year"] = hourly["year"].astype(int)
+    hourly_coverage = hourly.groupby(
+        ["year", "country"],
+        as_index=False,
+    ).agg(
+        hourly_rows=("timestamp_utc", "size"),
+        unique_hours=("timestamp_utc", "nunique"),
+    )
+    invalid_coverage = hourly_coverage.loc[
+        (hourly_coverage["hourly_rows"] != 8760)
+        | (hourly_coverage["unique_hours"] != 8760)
+    ]
+    if not invalid_coverage.empty:
+        sample = invalid_coverage.head().to_dict("records")
+        raise AssertionError(
+            "Figure 3 operating profiles must contain exactly 8,760 unique "
+            f"hours per country-year; invalid rows: {sample}."
+        )
+
+    for year, year_group in hourly.groupby("year", sort=True):
+        country_profiles = year_group.pivot(
+            index="timestamp_utc",
+            columns="country",
+            values="facility_energy_mwh",
+        ).sort_index()
+        if country_profiles.isna().any().any():
+            raise AssertionError(
+                f"Figure 3 hourly country profiles are incomplete for {year}."
+            )
+        profile_values = country_profiles.to_numpy(dtype=float)
+        profile_means = profile_values.mean(axis=0, keepdims=True)
+        if np.any(profile_means <= 0):
+            raise AssertionError(
+                f"Figure 3 hourly country profiles have non-positive means for {year}."
+            )
+        normalized_profiles = profile_values / profile_means
+        if not np.allclose(
+            normalized_profiles,
+            normalized_profiles[:, [0]],
+            rtol=1e-9,
+            atol=1e-9,
+        ):
+            max_deviation = float(
+                np.abs(normalized_profiles - normalized_profiles[:, [0]]).max()
+            )
+            raise AssertionError(
+                "Figure 3 country profiles do not share one relative hourly "
+                f"shape for {year}; maximum normalized deviation={max_deviation:.3e}."
+            )
+
+    hourly_annual = hourly.groupby(
+        ["year", "country"], as_index=False, sort=True
+    )["facility_energy_mwh"].sum()
+    m4_annual = annual.loc[
+        annual["variant"] == M4_VARIANT,
+        ["year", "country", "facility_energy_mwh"],
+    ]
+    energy_check = m4_annual.merge(
+        hourly_annual,
+        on=["year", "country"],
+        how="outer",
+        suffixes=("_annual", "_hourly"),
+        indicator=True,
+        validate="one_to_one",
+    )
+    if (energy_check["_merge"] != "both").any() or not np.allclose(
+        energy_check["facility_energy_mwh_annual"],
+        energy_check["facility_energy_mwh_hourly"],
+        rtol=1e-10,
+        atol=1e-5,
+    ):
+        raise AssertionError("Hourly M4 energy does not reproduce its annual total.")
+
+    records: list[dict[str, object]] = []
+
+    def add_profile_pair(
+        *,
+        scope: str,
+        country: str,
+        year: int,
+        trace_values: np.ndarray,
+        flat_annual_energy_mwh: float,
+    ) -> None:
+        n_hours = len(trace_values)
+        profiles = (
+            (
+                "flat_trace_mean_workload",
+                np.full(n_hours, flat_annual_energy_mwh / n_hours, dtype=float),
+            ),
+            ("hourly_trace_workload", trace_values),
+        )
+        for profile_name, values in profiles:
             records.append(
                 {
-                    "scenario": scenario,
-                    "policy": policy,
+                    "scenario": FIGURE_SCENARIO,
+                    "policy": FIGURE_POLICY,
+                    "scope": scope,
+                    "country": country,
                     "year": int(year),
-                    "failure_threshold_pct": float(threshold),
-                    "country_count": country_count,
-                    "carbon_failure_country_count": int(carbon_failed.sum()),
-                    "carbon_failure_share_pct": float(carbon_failed.mean() * 100.0),
-                    "energy_failure_country_count": int(energy_failed.sum()),
-                    "energy_failure_share_pct": float(energy_failed.mean() * 100.0),
-                    "either_failure_country_count": int(either_failed.sum()),
-                    "either_failure_share_pct": float(either_failed.mean() * 100.0),
-                    "mean_signed_carbon_error_pct": float(carbon_error.mean()),
-                    "mean_absolute_carbon_error_pct": float(
-                        absolute_carbon_error.mean()
-                    ),
-                    "median_absolute_carbon_error_pct": float(
-                        absolute_carbon_error.median()
-                    ),
-                    "p95_absolute_carbon_error_pct": float(
-                        absolute_carbon_error.quantile(0.95)
-                    ),
-                    "maximum_absolute_carbon_error_pct": float(
-                        absolute_carbon_error.max()
-                    ),
-                    "mean_absolute_energy_error_pct": float(
-                        absolute_energy_error.mean()
-                    ),
-                    "net_m1_minus_m4_carbon_tco2": float(
-                        group["m1_minus_m4_carbon_tco2"].sum()
-                    ),
-                    "total_absolute_m1_minus_m4_carbon_tco2": float(
-                        group["m1_minus_m4_carbon_tco2"].abs().sum()
-                    ),
+                    "profile": profile_name,
+                    "hours": n_hours,
+                    **_power_metrics(values),
                 }
             )
-    return pd.DataFrame.from_records(records).sort_values(
-        ["year", "policy", "scenario", "failure_threshold_pct"],
-        ignore_index=True,
+
+    flat_annual = annual.loc[annual["variant"] == MEAN_WORKLOAD_VARIANT]
+    for year, trace_group in hourly.groupby("year", sort=True):
+        global_trace = (
+            trace_group.groupby("timestamp_utc", sort=True)["facility_energy_mwh"]
+            .sum()
+            .to_numpy(dtype=float)
+        )
+        global_flat_energy = float(
+            flat_annual.loc[flat_annual["year"] == year, "facility_energy_mwh"].sum()
+        )
+        add_profile_pair(
+            scope="aggregate",
+            country="ALL",
+            year=int(year),
+            trace_values=global_trace,
+            flat_annual_energy_mwh=global_flat_energy,
+        )
+
+    detail_year = DETAIL_YEAR
+    if detail_year not in set(hourly["year"]):
+        raise AssertionError(
+            f"Figure 3d requires hourly results for {detail_year}."
+        )
+    detail_hourly = hourly.loc[hourly["year"] == detail_year]
+    for country, trace_group in detail_hourly.groupby("country", sort=True):
+        trace_values = trace_group.sort_values("timestamp_utc")[
+            "facility_energy_mwh"
+        ].to_numpy(dtype=float)
+        country_flat_energy = float(
+            flat_annual.loc[
+                (flat_annual["year"] == detail_year)
+                & (flat_annual["country"] == country),
+                "facility_energy_mwh",
+            ].iloc[0]
+        )
+        add_profile_pair(
+            scope="country",
+            country=COUNTRY_ISO3[country],
+            year=detail_year,
+            trace_values=trace_values,
+            flat_annual_energy_mwh=country_flat_energy,
+        )
+
+    result = pd.DataFrame.from_records(records)
+    flat = result["profile"] == "flat_trace_mean_workload"
+    if not np.allclose(result.loc[flat, "peak_to_mean_ratio"], 1.0) or not np.allclose(
+        result.loc[flat, "max_abs_ramp_mw_per_h"], 0.0
+    ):
+        raise AssertionError("The flat workload peak/ramp reference is not flat.")
+    return result.sort_values(
+        ["scope", "year", "country", "profile"], ignore_index=True
     )
 
 
 def _figure3a_output_table(global_comparison: pd.DataFrame) -> pd.DataFrame:
-    columns = [
-        "model",
-        "scenario",
-        "policy",
-        "year",
-        "facility_energy_mwh",
-        "power_twh",
-        "energy_difference_vs_m4_mwh",
-        "energy_difference_vs_m4_pct",
-        "carbon_tco2",
-        "carbon_mtco2",
-        "carbon_difference_vs_m4_tco2",
-        "carbon_difference_vs_m4_pct",
-    ]
-    is_base_cp = (global_comparison["scenario"] == "Base") & (
-        global_comparison["policy"] == "CP"
+    is_base_cp = (global_comparison["scenario"] == FIGURE_SCENARIO) & (
+        global_comparison["policy"] == FIGURE_POLICY
     )
-    return global_comparison.loc[is_base_cp, columns].reset_index(drop=True)
+    selected = global_comparison.loc[
+        is_base_cp,
+        [
+            "scenario",
+            "policy",
+            "year",
+            "model",
+            "facility_energy_mwh",
+            "carbon_tco2",
+        ],
+    ].copy()
+    wide = selected.pivot(
+        index=["scenario", "policy", "year"],
+        columns="model",
+        values=["facility_energy_mwh", "carbon_tco2"],
+    )
+    required = [
+        (metric, model)
+        for metric in ("facility_energy_mwh", "carbon_tco2")
+        for model in MODEL_ORDER
+    ]
+    missing = [column for column in required if column not in wide.columns]
+    if missing:
+        raise AssertionError(f"Figure 3a is missing model metrics: {missing}")
+
+    result = wide.index.to_frame(index=False)
+    m1_energy = wide[("facility_energy_mwh", "M1")].to_numpy(dtype=float)
+    m4_energy = wide[("facility_energy_mwh", "M4")].to_numpy(dtype=float)
+    m1_carbon = wide[("carbon_tco2", "M1")].to_numpy(dtype=float)
+    m4_carbon = wide[("carbon_tco2", "M4")].to_numpy(dtype=float)
+    result["m1_facility_energy_twh"] = m1_energy / 1e6
+    result["m4_facility_energy_twh"] = m4_energy / 1e6
+    result["m1_vs_m4_facility_energy_difference_pct"] = _relative_difference(
+        m1_energy,
+        m4_energy,
+    )
+    result["m1_carbon_mtco2"] = m1_carbon / 1e6
+    result["m4_carbon_mtco2"] = m4_carbon / 1e6
+    result["m1_vs_m4_carbon_difference_pct"] = _relative_difference(
+        m1_carbon,
+        m4_carbon,
+    )
+    return result.sort_values("year", ignore_index=True)
 
 
 def _figure3b_output_table(
-    annual_average_country_effects: pd.DataFrame,
+    annual_average_global_effects: pd.DataFrame,
 ) -> pd.DataFrame:
+    is_base_cp = (
+        annual_average_global_effects["scenario"] == FIGURE_SCENARIO
+    ) & (
+        annual_average_global_effects["policy"] == FIGURE_POLICY
+    )
+    result = annual_average_global_effects.loc[
+        is_base_cp,
+        [
+            "scenario",
+            "policy",
+            "year_start",
+            "year_end",
+            "years_averaged",
+            "countries_aggregated",
+            "effect_order",
+            "effect",
+            "effect_definition",
+            "annual_avg_energy_effect_mwh",
+            "energy_effect_pct_of_m4",
+            "annual_avg_carbon_effect_tco2",
+            "carbon_effect_pct_of_m4",
+            "annual_avg_total_m4_minus_m1_energy_mwh",
+            "annual_avg_total_m4_minus_m1_carbon_tco2",
+        ],
+    ].copy()
+    result["annual_avg_energy_effect_twh"] = (
+        result["annual_avg_energy_effect_mwh"] / 1e6
+    )
+    result["annual_avg_carbon_effect_mtco2"] = (
+        result["annual_avg_carbon_effect_tco2"] / 1e6
+    )
+    result["annual_avg_total_m4_minus_m1_energy_twh"] = (
+        result["annual_avg_total_m4_minus_m1_energy_mwh"] / 1e6
+    )
+    result["annual_avg_total_m4_minus_m1_carbon_mtco2"] = (
+        result["annual_avg_total_m4_minus_m1_carbon_tco2"] / 1e6
+    )
     columns = [
         "scenario",
         "policy",
         "year_start",
         "year_end",
         "years_averaged",
-        "country",
+        "countries_aggregated",
         "effect_order",
         "effect",
-        "source_variant",
-        "target_variant",
         "effect_definition",
-        "annual_avg_energy_effect_mwh",
+        "annual_avg_energy_effect_twh",
         "energy_effect_pct_of_m4",
-        "annual_avg_carbon_effect_tco2",
+        "annual_avg_carbon_effect_mtco2",
         "carbon_effect_pct_of_m4",
-        "annual_avg_total_m4_minus_m1_energy_mwh",
-        "annual_avg_total_m4_minus_m1_carbon_tco2",
-        "sum_of_energy_effects_mwh",
-        "sum_of_carbon_effects_tco2",
-        "energy_decomposition_check_mwh",
-        "carbon_decomposition_check_tco2",
+        "annual_avg_total_m4_minus_m1_energy_twh",
+        "annual_avg_total_m4_minus_m1_carbon_mtco2",
     ]
-    return annual_average_country_effects[columns].copy()
+    return result[columns].sort_values("effect_order", ignore_index=True)
 
 
-def _figure3c_output_table(failure_risk: pd.DataFrame) -> pd.DataFrame:
+def _figure3c_output_table(peak_ramp: pd.DataFrame) -> pd.DataFrame:
+    result = peak_ramp.loc[peak_ramp["scope"] == "aggregate"].copy()
+    result["mean_power_gw"] = result["mean_power_mw"] / 1000.0
+    result["peak_power_gw"] = result["peak_power_mw"] / 1000.0
+    result["p99_power_gw"] = result["p99_power_mw"] / 1000.0
+    result["max_abs_ramp_gw_per_h"] = (
+        result["max_abs_ramp_mw_per_h"] / 1000.0
+    )
     columns = [
         "scenario",
         "policy",
         "year",
-        "failure_threshold_pct",
-        "carbon_failure_country_count",
-        "carbon_failure_share_pct",
-        "mean_absolute_carbon_error_pct",
-        "p95_absolute_carbon_error_pct",
-        "maximum_absolute_carbon_error_pct",
+        "profile",
+        "hours",
+        "mean_power_gw",
+        "peak_power_gw",
+        "p99_power_gw",
+        "max_abs_ramp_gw_per_h",
     ]
-    return failure_risk[columns].copy()
+    profile_order = result["profile"].map(
+        {"flat_trace_mean_workload": 0, "hourly_trace_workload": 1}
+    )
+    result = result.assign(_profile_order=profile_order).sort_values(
+        ["year", "_profile_order"],
+        ignore_index=True,
+    )
+    return result[columns]
+
+
+def _figure3d_output_table(peak_ramp: pd.DataFrame) -> pd.DataFrame:
+    is_country_hourly = (peak_ramp["scope"] == "country") & (
+        peak_ramp["profile"] == "hourly_trace_workload"
+    )
+    result = peak_ramp.loc[is_country_hourly].copy()
+    if set(result["year"].astype(int)) != {DETAIL_YEAR}:
+        raise AssertionError(f"Figure 3d must contain only {DETAIL_YEAR} results.")
+    result["peak_power_gw"] = result["peak_power_mw"] / 1000.0
+    result["max_abs_ramp_gw_per_h"] = (
+        result["max_abs_ramp_mw_per_h"] / 1000.0
+    )
+    result = result.sort_values(
+        ["peak_power_gw", "country"],
+        ascending=[False, True],
+        ignore_index=True,
+    )
+    result.insert(0, "rank", np.arange(1, len(result) + 1))
+    columns = [
+        "rank",
+        "scenario",
+        "policy",
+        "year",
+        "country",
+        "profile",
+        "hours",
+        "peak_power_gw",
+        "max_abs_ramp_gw_per_h",
+    ]
+    return result[columns]
 
 
 def _write_workbook(output_path: Path, sheets: dict[str, pd.DataFrame]) -> None:
@@ -934,11 +1228,9 @@ def _write_workbook(output_path: Path, sheets: dict[str, pd.DataFrame]) -> None:
 
 def generate_figure3_data(
     output_path: Union[str, Path] = DEFAULT_OUTPUT,
-    scenarios: Sequence[str] = DEFAULT_SCENARIOS,
     countries: Sequence[str] = DEFAULT_COUNTRIES,
-    year_start: int = 2026,
-    years: int = 5,
-    failure_thresholds_pct: Sequence[float] = (5.0, 10.0, 20.0),
+    year_start: int = FIGURE_YEAR_START,
+    years: int = FIGURE_YEARS,
     workload_profile_path: Union[str, Path] = ROOT_DIR / "dataset",
     server_profile_path: Optional[Union[str, Path]] = None,
     hourly_carbon_factors_dir: Union[str, Path] = ROOT_DIR
@@ -951,12 +1243,24 @@ def generate_figure3_data(
     max_intervals: Optional[int] = None,
     verbose: bool = True,
 ) -> Path:
-    """Calculate all Figure 3 panel data and write one Excel workbook."""
-    scenarios = list(scenarios)
+    """Calculate fixed Base-CP Figure 3 panels a-d and write one workbook."""
     countries = list(countries)
-    failure_thresholds_pct = [float(value) for value in failure_thresholds_pct]
-    if any(value <= 0 for value in failure_thresholds_pct):
-        raise ValueError("All failure thresholds must be positive percentages.")
+    year_end = year_start + years - 1
+    if year_start != FIGURE_YEAR_START or year_end != FIGURE_YEAR_END:
+        raise ValueError(
+            "Figure 3 is fixed to "
+            f"{FIGURE_YEAR_START}-{FIGURE_YEAR_END}; got {year_start}-{year_end}."
+        )
+    expected_countries = set(DEFAULT_COUNTRIES)
+    if len(countries) != len(DEFAULT_COUNTRIES) or set(countries) != expected_countries:
+        raise ValueError(
+            "Figure 3 is fixed to the complete 24-country boundary."
+        )
+    unmapped_countries = [
+        country for country in countries if country not in COUNTRY_ISO3
+    ]
+    if unmapped_countries:
+        raise ValueError(f"Missing ISO3 labels for countries: {unmapped_countries}")
 
     if verbose:
         print("[figure3] Building the shared GPU workload profile.", flush=True)
@@ -968,8 +1272,8 @@ def generate_figure3_data(
         verbose=verbose,
     )
 
-    variant_results = _collect_variant_results(
-        scenarios=scenarios,
+    variant_results, base_cp_hourly = _collect_variant_results(
+        scenarios=[FIGURE_SCENARIO],
         countries=countries,
         year_start=year_start,
         years=years,
@@ -986,11 +1290,8 @@ def generate_figure3_data(
     )
     global_comparison = _global_model_comparison(variant_results)
     country_effects = _country_effect_decomposition(variant_results)
-    annual_average_effects = _annual_average_country_effects(country_effects)
-    country_comparison = _country_m1_m4_comparison(variant_results)
-    failure_risk = _failure_risk_table(
-        country_comparison, failure_thresholds_pct
-    )
+    annual_average_effects = _annual_average_global_effects(country_effects)
+    peak_ramp = _peak_ramp_table(variant_results, base_cp_hourly)
 
     max_energy_check = float(
         annual_average_effects["energy_decomposition_check_mwh"].abs().max()
@@ -1010,7 +1311,8 @@ def generate_figure3_data(
         "Fig3b_Effect_Decomposition": _figure3b_output_table(
             annual_average_effects
         ),
-        "Fig3c_Failure_Risk": _figure3c_output_table(failure_risk),
+        "Fig3c_Operating_Shape": _figure3c_output_table(peak_ramp),
+        "Fig3d_Country_Peak_Ramp": _figure3d_output_table(peak_ramp),
     }
     resolved_output = Path(output_path)
     _write_workbook(resolved_output, sheets)
@@ -1028,16 +1330,6 @@ def _parse_args() -> argparse.Namespace:
         description="Generate the Excel calculation results required by Figure 3."
     )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--scenarios", nargs="+", default=list(DEFAULT_SCENARIOS))
-    parser.add_argument("--countries", nargs="+", default=list(DEFAULT_COUNTRIES))
-    parser.add_argument("--year-start", type=int, default=2026)
-    parser.add_argument("--years", type=int, default=5)
-    parser.add_argument(
-        "--failure-thresholds-pct",
-        nargs="+",
-        type=float,
-        default=[5.0, 10.0, 20.0],
-    )
     parser.add_argument(
         "--workload-profile-path", type=Path, default=ROOT_DIR / "dataset"
     )
@@ -1067,11 +1359,6 @@ def main() -> None:
     args = _parse_args()
     generate_figure3_data(
         output_path=args.output,
-        scenarios=args.scenarios,
-        countries=args.countries,
-        year_start=args.year_start,
-        years=args.years,
-        failure_thresholds_pct=args.failure_thresholds_pct,
         workload_profile_path=args.workload_profile_path,
         server_profile_path=args.server_profile_path,
         hourly_carbon_factors_dir=args.hourly_carbon_factors_dir,
