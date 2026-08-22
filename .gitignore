@@ -1,5 +1,9 @@
 paper/
-results/
+results/*
+!results/figure1_data.xlsx
+!results/figure2_data.xlsx
+!results/figure3_data.xlsx
+!results/figure4_data.xlsx
 
 .idea/
 __pycache__/
@@ -10,6 +14,7 @@ Thumbs.db
 .DS_Store
 
 dataset/EM-CPNDCNZ
+dataset/EM-CPNDCNZ.zip
 dataset/result_df_full_year_2020.pkl
 dataset/asi_opensource_pod_hourly
 dataset/asi_opensource_server_hourly

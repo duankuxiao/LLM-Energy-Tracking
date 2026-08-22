@@ -78,9 +78,10 @@ M4 是比较 M1—M3 核算偏差时的高精度基准。
 
 ### AI 数据中心容量与增长路径
 
-- `dataset/Data_annex_Energy_and_AI.xlsx`：IEA 能源与 AI 数据附件，包含世界和区域数据表。
 - `dataset/Installed_capacity_data.py`：存放 2025—2030 年四类情景下的总容量、IT 容量、非 IT 容量、24 国容量份额和默认 AI 容量校准因子。
 - 默认 AI 容量因子根据 IEA 2026 年报告 [Key Questions on Energy and AI](https://www.iea.org/reports/key-questions-on-energy-and-ai) 中的 AI 专用数据中心用电路径进行校准；代码注释记录了校准端点和中间年份假设。
+
+IEA 数据附件作为外部来源使用，不随本仓库重新分发；论文运行所需的已转录容量路径和校准输入已经保存在 `dataset/Installed_capacity_data.py`。
 
 需要注意，国家容量份额和情景插值属于项目的模型输入或派生参数，不应被理解为原始数据提供方直接发布的逐国预测值。
 
@@ -105,19 +106,11 @@ M4 是比较 M1—M3 核算偏差时的高精度基准。
 
 ### 小时级电网碳强度
 
-`dataset/EM-estimate/` 保存 24 国 2026—2030 年、三类电力政策路径下的小时数据。CSV 包含 UTC 时间、直接碳强度、生命周期碳强度、无碳电力比例和可再生能源比例等字段。
+M2 和 M4 在本地从 `dataset/EM-CPNDCNZ/` 读取 24 国 2026—2030 年、三类电力政策路径下的小时数据。CSV 包含 UTC 时间、直接碳强度、生命周期碳强度、无碳电力比例和可再生能源比例等字段；完整研究输入由 360 个小时 CSV 构成，即 24 个国家、CP/NDC/NZ 三类路径和 2026—2030 五个年份的完整组合。
 
 项目内文件以 2025 年 Electricity Maps 下载数据为历史小时形状，并根据 `dataset/Factors.py` 的年度路径进行相对缩放，构造未来情景。Electricity Maps 的数据说明和获取方式参见其[数据页面](https://www.electricitymaps.com/data)和[学术数据说明](https://help.electricitymaps.com/en/articles/13168512-academic-data-access-and-availability)。
 
-小时数据可能受原始提供方的访问、引用和再分发条款约束。使用者应自行确认用途符合 Electricity Maps 的最新许可，并在论文或其他公开成果中按要求署名。
-
-### 其他辅助数据
-
-- `dataset/Carbon_emission_factors_2010_2018.csv`：历史电力碳排放因子；
-- `dataset/climate_data_2025.csv`：2025 年气候辅助数据；
-- `dataset/result_df_full_year_2020.pkl`：历史全年中间数据。
-
-这些文件并非所有 M1—M4 默认运行路径都必须读取，其用途应结合具体分析脚本和论文方法说明判断。
+Electricity Maps 的许可不允许本项目公开再分发这些小时数据，因此 GitHub 仓库不包含 `dataset/EM-CPNDCNZ.zip` 或其解压内容。合资格研究人员应通过 Electricity Maps 官方渠道独立申请访问，并确保用途符合其最新条款。小时数据不适用本项目的 MIT 软件许可证。
 
 ## 项目结构
 
@@ -134,13 +127,12 @@ M4 是比较 M1—M3 核算偏差时的高精度基准。
 ├── dataset/
 │   ├── Factors.py                      # 年度碳因子与 PUE
 │   ├── Installed_capacity_data.py      # 容量、国家份额与 AI 校准因子
-│   ├── Data_annex_Energy_and_AI.xlsx   # IEA 数据附件
-│   ├── EM-estimate/                    # 24 国未来小时碳强度
+│   ├── EM-CPNDCNZ/                     # 经许可取得并在本地准备的小时碳强度；不纳入 Git
+│   ├── validation/                     # MLPerf 与国家统计验证输入及说明
 │   ├── asi_opensource_pod_hourly/      # GPU Pod 小时轨迹
 │   └── asi_opensource_server_hourly/   # 服务器小时轨迹
-├── paper/                              # 论文大纲与研究设计
-├── results/                            # 默认模型输出目录
-├── scripts/                            # 分析和批处理脚本目录
+├── results/                            # 默认模型输出及 Figure 1–4 源数据工作簿
+├── scripts/                            # 分析、绘图和外部验证脚本
 ├── run.py                              # 一次运行 M1—M4 并生成对比汇总
 ├── LICENSE                             # MIT 许可证
 └── README.md
@@ -148,12 +140,13 @@ M4 是比较 M1—M3 核算偏差时的高精度基准。
 
 ## 环境与依赖
 
-建议使用 Python 3.9 或更高版本。核心依赖为：
+论文提交包已在 Python 3.12.3 下验证。为固定复现环境，请使用以下精确依赖版本：
 
-- `numpy`；
-- `pandas`；
-- `pyarrow`，用于读取 Parquet 格式的 Alibaba 轨迹；
-- `openpyxl`，仅在需要直接读取 Excel 数据附件时使用。
+- `numpy==2.1.3`；
+- `pandas==2.2.3`；
+- `pyarrow==17.0.0`，用于读取 Parquet 格式的 Alibaba 轨迹；
+- `openpyxl==3.1.5`，用于读取论文图表源数据工作簿；
+- `matplotlib==3.9.2`，用于生成验证图。
 
 可在项目根目录创建独立环境并安装依赖：
 
@@ -161,7 +154,7 @@ M4 是比较 M1—M3 核算偏差时的高精度基准。
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install numpy pandas pyarrow openpyxl
+python -m pip install numpy==2.1.3 pandas==2.2.3 pyarrow==17.0.0 openpyxl==3.1.5 matplotlib==3.9.2
 ```
 
 Linux 或 macOS 下激活环境：
@@ -172,20 +165,20 @@ source .venv/bin/activate
 
 ## 数据准备
 
-GPU 轨迹和小时碳强度数据体积较大，以下目录已被 `.gitignore` 排除，不会随普通 Git 克隆自动提供：
+受许可限制的小时碳强度数据及体积较大的 GPU 轨迹不随仓库分发。以下本地输入已被 `.gitignore` 排除：
 
 ```text
-dataset/EM-estimate/
+dataset/EM-CPNDCNZ.zip
+dataset/EM-CPNDCNZ/
 dataset/asi_opensource_pod_hourly/
 dataset/asi_opensource_server_hourly/
-dataset/result_df_full_year_2020.pkl
 ```
 
-运行 M2 或 M4 前需要准备 `EM-estimate`；运行 M3 或 M4 前需要准备两类 ASI Parquet 轨迹。预期目录示例如下：
+运行 M2 或 M4 前，用户需通过 Electricity Maps 的[数据页面](https://www.electricitymaps.com/data)或[学术数据申请说明](https://help.electricitymaps.com/en/articles/13168512-academic-data-access-and-availability)自行取得许可数据，并按上述研究方法准备未来情景文件后放入 `dataset/EM-CPNDCNZ/`。运行 M3 或 M4 还需按 Alibaba Cluster Trace Program 的公开说明准备两类 ASI Parquet 轨迹。预期目录示例如下：
 
 ```text
 dataset/
-├── EM-estimate/
+├── EM-CPNDCNZ/
 │   ├── USA/
 │   │   ├── ...-US-CP-2026-hourly.csv
 │   │   ├── ...-US-NDC-2026-hourly.csv
@@ -227,6 +220,25 @@ python run.py --countries USA --year-start 2026 --years 1 --max-intervals 24
 ```
 
 `max_intervals` 会改变轨迹统计口径，只能用于调试，正式结果应省略该参数。运行 `python run.py --help` 可查看完整参数。
+
+### 外部验证与论文图表源数据
+
+外部验证输入位于 `dataset/validation/`，验证脚本为 `scripts/validate_energy_model.py`。从项目根目录运行：
+
+```powershell
+python scripts\validate_energy_model.py --bootstrap-replicates 10000
+```
+
+脚本使用固定随机种子 `20260819`，将诊断表写入 `results/model_validation/`，并将补充验证图写入 `figures/`。验证数据来源、筛选口径和国家统计边界见 `dataset/validation/README.md`。
+
+论文主图的现有源数据工作簿保存在：
+
+- `results/figure1_data.xlsx`：Figure 1a–g；
+- `results/figure2_data.xlsx`：Figure 2a–d 及 Figure 2b 的完整国家级来源表；
+- `results/figure3_data.xlsx`：Figure 3a–d；
+- `results/figure4_data.xlsx`：Figure 4a。
+
+这四个工作簿是论文图表的分析后源数据；`results/` 下其他运行输出仍由 `.gitignore` 排除。
 
 ### 运行 M1
 
@@ -397,10 +409,6 @@ M4 返回并可保存以下主要结果表：
 - M4 的年度结果可能掩盖国家小时级正负偏差抵消，正式分析应同时检查国家与全球尺度。
 - 小时因子缺失时默认回退到年度因子。正式核算前应检查输出中的 `carbon_factor_source`，避免将回退结果误认为真实小时数据。
 - 完整 GPU 轨迹体积很大，正式运行需要足够的磁盘空间、内存和处理时间。
-
-## 论文材料
-
-`paper/Outline of a Paper on Decarbonization Pathways for Global AI Data Centers_v2.md` 包含论文研究大纲、章节结构、M1—M4 方法定义、偏差分解框架和建议图表。`paper/` 已在 `.gitignore` 中排除，公开仓库若需要附带论文材料，应单独确认其版本与发布权限。
 
 ## 许可证
 
