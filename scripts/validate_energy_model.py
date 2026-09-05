@@ -33,7 +33,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from core.m4_hourly_gpu_model import HardwarePowerConfig
+from core.hourly_workload_resolved_model import HardwarePowerConfig
 
 
 DEFAULT_MLPERF = ROOT_DIR / "dataset" / "validation" / "raw" / "mlperf_power_raw_data.csv"

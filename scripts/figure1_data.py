@@ -18,8 +18,8 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-import core.m4_hourly_gpu_model as m4_model
-from core.m4_hourly_gpu_model import (
+import core.hourly_workload_resolved_model as hourly_model
+from core.hourly_workload_resolved_model import (
     COMPONENTS,
     TASK_TYPES,
     Alibaba2026TraceConfig,
@@ -77,7 +77,7 @@ def _capacity_table(
     """Build total and AI capacity results for Figure 1a."""
     records = []
     for scenario in scenarios:
-        scenario_col = m4_model.SCENARIO_COL_MAP[scenario]
+        scenario_col = hourly_model.SCENARIO_COL_MAP[scenario]
         for year in range(year_start, year_start + years):
             year_row = year - DATA_YEAR_START
             total_capacity_gw = float(TOTAL_CAPACITY[year_row, scenario_col])
@@ -189,22 +189,23 @@ def _capture_task_component_energy(
     profile: WorkloadProfile,
     verbose: bool,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Run one scenario and retain M4's exact task-by-component allocation.
+    """Run one scenario and retain the model's task-by-component allocation.
 
-    M4 already calculates the task-by-component matrix internally for its
+    The hourly workload-resolved model calculates the task-by-component matrix
+    internally for its
     task-energy result.  The wrapper records that matrix during this process
     and immediately restores the original function, so no core file is
-    modified and the allocation remains identical to M4's own calculation.
+    modified and the allocation remains identical to the model's own calculation.
     """
     captured_allocations: list[np.ndarray] = []
-    original_allocator = m4_model._allocate_energy_to_task_types
+    original_allocator = hourly_model._allocate_energy_to_task_types
 
     def recording_allocator(*args, **kwargs) -> np.ndarray:
         allocation = original_allocator(*args, **kwargs)
         captured_allocations.append(np.array(allocation, copy=True))
         return allocation
 
-    m4_model._allocate_energy_to_task_types = recording_allocator
+    hourly_model._allocate_energy_to_task_types = recording_allocator
     try:
         result = run_workload_component_footprint(
             renewable_energy_policy=policy,
@@ -226,11 +227,11 @@ def _capture_task_component_energy(
             workload_profile=profile,
         )
     finally:
-        m4_model._allocate_energy_to_task_types = original_allocator
+        hourly_model._allocate_energy_to_task_types = original_allocator
 
     if len(captured_allocations) != years:
         raise RuntimeError(
-            "Unexpected number of M4 task-component allocations: "
+            "Unexpected number of hourly-model task-component allocations: "
             f"expected {years}, received {len(captured_allocations)}."
         )
 
@@ -328,7 +329,10 @@ def generate_figure1_data(
     task_component_frames = []
     for scenario in scenarios:
         if verbose:
-            print(f"[figure1] Calculating M4 results for {scenario}.", flush=True)
+            print(
+                f"[figure1] Calculating hourly workload-resolved results for {scenario}.",
+                flush=True,
+            )
         annual, task_components = _capture_task_component_energy(
             policy=policy,
             scenario=scenario,

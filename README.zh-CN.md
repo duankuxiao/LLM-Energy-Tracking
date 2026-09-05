@@ -1,154 +1,167 @@
 <p align="center">
-  <img src="logo.png" alt="Logo" width="180"/>
+  <img src="logo.png" alt="项目标志" width="180"/>
 </p>
 
 # 全球 AI 数据中心能耗与碳排放核算
 
-本项目面向全球主要人工智能（AI）数据中心，构建年度及小时级电力消耗与碳排放核算模型。研究以 24 个主要数据中心国家为对象，综合考虑全球数据中心容量增长、国家容量分配、AI 容量占比、服务器功率特征、PUE，以及年度或小时级电网碳强度，评估 2025—2030 年不同需求与电力系统情景下的能源和碳排放结果。
+[English README](README.md)
 
-项目的核心是由“时间分辨率 × 硬件功率模型”形成的 M1—M4 核算矩阵，用于识别年度平均核算造成的时间聚合偏差，以及传统 CPU 功率近似造成的 GPU 硬件表征偏差。
+本仓库是全球人工智能（AI）数据中心用电与运行碳排放研究的配套代码。模型综合数据中心容量路径、国家分配、年度 AI 容量因子、公开 GPU 集群负荷轨迹、分部件功率模型、PUE，以及年度或小时级电网碳强度。
 
-> 当前论文与 M1—M4 模型聚焦电力消耗、负荷和碳排放，不开展水足迹或 WUE 分析。
+仓库术语与原稿保持一致：核心比较连接“**年度 CPU 模型**”和“**小时级工作负载解析模型**”，并通过有序 bridge 依次引入分部件功率、轨迹派生的平均工作负载、小时负荷变化和小时碳强度匹配。这里的端点和中间步骤均是模型配置；小时级端点不被视为实测真值。
 
-## 核算模型
+> **研究范围。** 本研究核算电力消耗、运行负荷和运行碳排放，不开展用水量或 WUE 分析。
 
-| 模型 | 能耗模型 | 电网碳因子 | 主要用途 |
+## 核算框架
+
+### 两个端点模型
+
+| 端点 | 功率与负荷表征 | 电网碳强度 | 用途 |
 | --- | --- | --- | --- |
-| M1 | 传统 CPU 利用率—功率模型 | 年度平均 | 传统简化核算基线 |
-| M2 | 传统 CPU 利用率—功率模型 | 小时级 | 单独修正碳因子的时间分辨率 |
-| M3 | GPU 工作负载与分部件功率模型 | 年度平均 | 单独修正 AI 硬件能耗表征 |
-| M4 | GPU 工作负载与分部件功率模型 | 小时级 | 完整的小时级 GPU 核算基准 |
+| 年度 CPU 模型 | 汇总的 CPU 风格利用率—功率方程，采用固定任务比例和利用率假设 | 年度均值 | 传统年度核算基线 |
+| 小时级工作负载解析模型 | 轨迹驱动的 CPU、GPU、内存、存储和 IT 风扇分部件功率 | 小时级 | 年度结果与运行峰值、爬坡指标的参考配置 |
 
-四个模型使用一致的数据中心容量、国家分配、AI 容量边界、PUE 和政策情景。模型间的主要差别仅来自服务器能耗表征和电网碳因子的时间分辨率。
+两个端点共用相同的需求路径、国家容量边界、年度 AI 容量因子、PUE 输入和电力系统路径。由于二者之间同时改变了多项表征选择，代码使用有序 bridge 显式分解差异。
 
-### M1：年度 CPU 模型
+### 有序 bridge
 
-`core/m1_annual_cpu_model.py` 调用 `core/past_research_data_center_energy_carbon_model.py` 中的过去研究核算方法，采用空闲功率率、最大功率率和综合利用率计算年度 IT 用电，再通过 PUE 转换为数据中心总用电，最后匹配 `dataset/Factors.py` 中的年度碳因子。
+图 3 使用五个连续配置。每项效应均定义为后一配置减去前一配置。
 
-M1 不引入小时任务负荷，也不区分 CPU、GPU、内存、存储等设备能耗组成。其年度简化模型使用训练、推理、其他和未分类四类统一任务口径；默认有效任务比例为训练 20%、推理 75%、其他 5%，未分类比例为 0。各任务继续采用传统利用率—功率系数计算，并输出任务年度能耗。
+| 顺序 | 源数据中的配置标识 | 新引入的变化 |
+| --- | --- | --- |
+| 1 | `annual_cpu_baseline` | 年度 CPU 起始基线 |
+| 2 | `component_power_with_legacy_load` | 在保留年度模型任务比例和利用率假设的同时，将汇总功率替换为分部件功率 |
+| 3 | `flat_trace_annual_carbon` | 使用轨迹派生的平均任务—资源负荷，保持负荷平坦并继续使用年度碳强度 |
+| 4 | `hourly_trace_annual_carbon` | 恢复完整小时负荷形状，继续使用年度碳强度 |
+| 5 | `hourly_trace_hourly_carbon` | 将小时用电与小时电网碳强度匹配 |
 
-### M2：小时碳因子 CPU 模型
+四项效应标识为 `power_configuration`、`mean_workload_representation`、`load_temporal_variability` 和 `hourly_carbon_matching`。代码检查四项效应之和是否等于“小时端点减年度基线”的直接差值。该分解依赖替换顺序，不应解释为与顺序无关的因果归因。
 
-`core/m2_hourly_carbon_cpu_model.py` 使用与 M1 完全相同的年度任务分类和能耗算法，因此 M1 与 M2 的国家年度总用电量及任务能耗按设计保持一致。M2 不引入小时任务曲线和设备分项，而是将国家年度用电表示为恒定小时功率，再逐小时匹配电网碳强度。
+## 审稿导航
 
-M2 用于隔离年度平均碳因子与小时级碳因子之间的时间聚合效应。
-
-### M3：年度 GPU 模型
-
-`core/m3_annual_gpu_model.py` 调用 `core/m4_hourly_gpu_model.py` 中的 GPU 工作负载与分部件能耗算法，但关闭小时电网匹配，仅汇总年度用电并采用 `dataset/Factors.py` 中的年度碳因子。
-
-该模型基于公开 GPU 集群轨迹估算 CPU、GPU、内存、存储和 IT 风扇功率，并将轨迹负载按国家 AI IT 容量进行缩放。
-
-### M4：小时级 GPU 模型
-
-`core/m4_hourly_gpu_model.py` 是完整核算模型。它读取 GPU Pod 和服务器轨迹，构建训练、推理、其他和未分类任务的小时资源负载，计算各硬件组成的小时功率，通过 PUE 得到设施用电，再与国家小时碳强度逐时匹配。
-
-M4 是比较 M1—M3 核算偏差时的高精度基准。
+| 原稿内容 | 主要实现 | 供审稿人核对的输出 |
+| --- | --- | --- |
+| 需求路径、国家分配、任务与部件能耗（图 1） | [`dataset/Installed_capacity_data.py`](dataset/Installed_capacity_data.py)、[`scripts/figure1_data.py`](scripts/figure1_data.py) | [`results/figure1_data.xlsx`](results/figure1_data.xlsx) |
+| 电网路径与减排量（图 2） | [`dataset/Factors.py`](dataset/Factors.py)、[`scripts/figure2_data.py`](scripts/figure2_data.py) | [`results/figure2_data.xlsx`](results/figure2_data.xlsx) |
+| 年度—小时端点比较、有序 bridge、峰值和爬坡（图 3） | [`core/annual_cpu_model.py`](core/annual_cpu_model.py)、[`core/hourly_workload_resolved_model.py`](core/hourly_workload_resolved_model.py)、[`scripts/figure3_data.py`](scripts/figure3_data.py) | [`results/figure3_data.xlsx`](results/figure3_data.xlsx) |
+| 单因素敏感性分析（图 4） | [`scripts/figure4_data.py`](scripts/figure4_data.py) | [`results/figure4_data.xlsx`](results/figure4_data.xlsx) |
+| MLPerf 功率诊断与轨迹边界审查（补充图 S1） | [`scripts/validate_energy_model.py`](scripts/validate_energy_model.py)、[`dataset/validation/`](dataset/validation/) | 运行后写入 `results/model_validation/` |
 
 ## 研究范围与情景
 
 ### 国家范围
 
-默认研究以下 24 个国家：
+默认模型边界包含 24 个国家：
 
 `USA`、`China`、`Japan`、`France`、`India`、`Singapore`、`Canada`、`Germany`、`United_Kingdom`、`Australia`、`Italy`、`South_Korea`、`South_Africa`、`Ireland`、`UAE`、`Brazil`、`Israel`、`Netherlands`、`Spain`、`Sweden`、`Belgium`、`Norway`、`Poland` 和 `Switzerland`。
 
-代码使用上述英文标识作为国家键。自定义国家列表时，名称必须与 `dataset/Installed_capacity_data.py` 和 `dataset/Factors.py` 中的键一致。
+这些标识是 [`dataset/Installed_capacity_data.py`](dataset/Installed_capacity_data.py) 与 [`dataset/Factors.py`](dataset/Factors.py) 使用的规范键。当前国家分配没有表示剩余的全球容量份额，因此输出应表述为“模型覆盖国家合计”，而不是完整全球总量。
 
-### AI 数据中心需求情景
+### AI 数据中心需求路径
 
-代码支持四种容量增长情景：
+| 标识 | 含义 |
+| --- | --- |
+| `Base` | 基准容量增长路径 |
+| `Lift-Off` | 更快需求增长路径 |
+| `High Efficiency` | 效率改善路径 |
+| `Headwinds` | 受约束增长路径 |
 
-- `Base`：基准增长路径；
-- `Lift-Off`：较快需求增长路径；
-- `High Efficiency`：效率提升路径；
-- `Headwinds`：增长受限路径。
+向代码传入情景名称时必须使用表中的准确拼写。
 
-传入函数的情景名称必须使用上面的精确拼写。
+### 电力系统路径
 
-### 电力系统情景
+| 标识 | 含义 |
+| --- | --- |
+| `CP` | 当前政策（Current Policies） |
+| `NDC` | 国家自主贡献（Nationally Determined Contributions） |
+| `NZ` | 净零（Net Zero） |
 
-- `CP`：Current Policies，当前政策路径；
-- `NDC`：Nationally Determined Contributions，国家自主贡献路径；
-- `NZ`：Net Zero，净零路径。
+## 数据与代码可用性
 
-年度碳因子、小时碳因子的未来缩放以及模型输出均按这三类政策路径组织。
+| 资源 | 仓库状态 | 获取方式或来源 |
+| --- | --- | --- |
+| 两个端点模型与有序 bridge 源代码 | 已包含 | 本仓库 |
+| 年度碳强度和 PUE 输入 | 已包含 | [`dataset/Factors.py`](dataset/Factors.py) |
+| 容量与需求路径输入 | 已包含 | [`dataset/Installed_capacity_data.py`](dataset/Installed_capacity_data.py) |
+| 外部诊断输入 | 已包含 | [`dataset/validation/`](dataset/validation/) |
+| 图 1—4 源数据工作簿 | 已包含 | [`results/`](results/) |
+| Electricity Maps 小时数据及其派生情景文件 | **不公开分发** | 需从 Electricity Maps 合法取得 |
+| Alibaba GPU Pod 和服务器轨迹 | 未打包 | 需从 Alibaba Cluster Trace Program 获取 |
+| IEA 数据附件 | 不重新分发 | 需从 International Energy Agency 获取 |
 
-## 数据来源
+年度 CPU 模型可使用仓库内的年度输入独立运行。完整运行小时级工作负载解析模型和有序 bridge，需要准备下述外部负荷轨迹与小时碳强度文件。仓库内已有论文图表源数据工作簿，审稿人无需获得受限数据即可核对已报告数值。
 
-### AI 数据中心容量与增长路径
+### 容量与增长输入
 
-- `dataset/Installed_capacity_data.py`：存放 2025—2030 年四类情景下的总容量、IT 容量、非 IT 容量、24 国容量份额和默认 AI 容量校准因子。
-- 默认 AI 容量因子根据 IEA 2026 年报告 [Key Questions on Energy and AI](https://www.iea.org/reports/key-questions-on-energy-and-ai) 中的 AI 专用数据中心用电路径进行校准；代码注释记录了校准端点和中间年份假设。
+[`dataset/Installed_capacity_data.py`](dataset/Installed_capacity_data.py) 存放 2025—2030 年四类需求路径下的总容量、IT 容量和非 IT 容量，以及固定国家份额和年度 AI 容量因子。
 
-IEA 数据附件作为外部来源使用，不随本仓库重新分发；论文运行所需的已转录容量路径和校准输入已经保存在 `dataset/Installed_capacity_data.py`。
-
-需要注意，国家容量份额和情景插值属于项目的模型输入或派生参数，不应被理解为原始数据提供方直接发布的逐国预测值。
+默认 AI 容量校准依据 IEA 报告 [Key Questions on Energy and AI](https://www.iea.org/reports/key-questions-on-energy-and-ai) 讨论的 AI 专用数据中心用电路径。校准端点与中间年份插值假设记录在源代码中。国家份额和中间情景值属于模型输入或派生参数，不应理解为原始数据提供方直接发布的逐国预测。
 
 ### GPU 工作负载与服务器轨迹
 
-- `dataset/asi_opensource_pod_hourly/`：Alibaba Serverless Infrastructure（ASI）GPU Pod 小时轨迹；
-- `dataset/asi_opensource_server_hourly/`：ASI 服务器资源与设备清单小时轨迹；
-- 官方项目入口：[Alibaba Cluster Trace Program](https://github.com/alibaba/clusterdata)；
-- 轨迹背景与系统说明：[Heterogeneity at Hyperscale: Characterization and Scheduling of Large Production AI Clusters at Alibaba](https://www.usenix.org/conference/osdi26/presentation/li-suyi)。
+小时级工作负载解析模型读取两类 Alibaba Serverless Infrastructure 数据：
 
-模型读取 `asi_opensource_pod_hourly` 中的 CPU 请求与利用率、GPU 请求、GPU SM 利用率、GPU 显存使用、任务类型和运行状态等字段。能耗边界默认纳入全部活跃 Pod：即使 `gpu_request == 0`，CPU-only Pod 的 CPU 和内存活动仍属于 AI 集群能耗。论文任务比例采用独立的严格筛选口径，仅统计论文时间窗口内具有 GPU 显存请求和有效 GPU 使用小时的已分类任务；该筛选不删除能耗边界内的 CPU-only 负载。`training` 保持为训练，在线与离线推理合并为推理，`dev` 与明确标注的 `other` 合并为其他，空值、`unknown` 及异常标签单列为 `unclassified`。未分类负荷保留在总能耗中，但不计入论文口径的已分类任务比例。公开轨迹不含完整的存储活动和主机内存容量，因此当前实现分别使用空闲存储功率和 CPU 加权的内存活动代理；这些假设会写入 M4 的轨迹容量来源输出。
+- `dataset/asi_opensource_pod_hourly/`：GPU Pod 小时记录；
+- `dataset/asi_opensource_server_hourly/`：服务器资源清单小时记录。
 
-### 年度碳因子与 PUE
+轨迹来自 [Alibaba Cluster Trace Program](https://github.com/alibaba/clusterdata)，系统背景参见 [Heterogeneity at Hyperscale: Characterization and Scheduling of Large Production AI Clusters at Alibaba](https://www.usenix.org/conference/osdi26/presentation/li-suyi)。
 
-`dataset/Factors.py` 提供：
+能耗边界保留所有活跃 Pod，包括 GPU 请求为零的 CPU-only Pod。原稿中的任务结构审查使用独立且更严格的过滤条件：论文时间窗口内的已分类任务必须具有 GPU 显存请求和有效 GPU 使用小时。`training` 保持为训练，在线与离线推理合并为推理，`dev` 与明确标注的 `other` 合并为其他，空值、`unknown` 和异常标签列为 `unclassified`。未分类活动计入总能耗，但不进入已分类任务比例的分母。
 
-- 24 国在 `CP`、`NDC` 和 `NZ` 路径下的年度电网碳排放因子；
-- 不同国家、年份和需求情景对应的 PUE；
-- 碳因子单位为 `kg CO₂/MWh`。
+公开轨迹缺少完整存储活动和主机内存容量，因此实现使用空闲存储功率和 CPU 加权的内存活动代理。这些假设记录在返回的 `trace_resource_capacity` 表中。
 
-这些因子用于 M1 和 M3 的年度碳排放计算，也用于缺失小时数据时的回退处理。
+### 年度碳强度与 PUE
+
+[`dataset/Factors.py`](dataset/Factors.py) 提供 24 国在 `CP`、`NDC` 和 `NZ` 路径下的年度电网碳强度，以及按国家、年份和需求路径区分的 PUE。碳强度单位为 `kg CO₂/MWh`。
+
+年度 CPU 模型直接使用年度因子；有序 bridge 的年度碳强度配置也使用这些因子。当小时文件缺失且允许回退时，同一年度因子作为回退值。
 
 ### 小时级电网碳强度
 
-M2 和 M4 在本地从 `dataset/EM-CPNDCNZ/` 读取 24 国 2026—2030 年、三类电力政策路径下的小时数据。CSV 包含 UTC 时间、直接碳强度、生命周期碳强度、无碳电力比例和可再生能源比例等字段；完整研究输入由 360 个小时 CSV 构成，即 24 个国家、CP/NDC/NZ 三类路径和 2026—2030 五个年份的完整组合。
+小时模型预期在 `dataset/EM-CPNDCNZ/` 下读取 360 个本地 CSV：24 个国家 × 3 类电力系统路径 × 2026—2030 五年。文件包含 UTC 时间戳、直接碳强度和生命周期碳强度列。
 
-项目内文件以 2025 年 Electricity Maps 下载数据为历史小时形状，并根据 `dataset/Factors.py` 的年度路径进行相对缩放，构造未来情景。Electricity Maps 的数据说明和获取方式参见其[数据页面](https://www.electricitymaps.com/data)和[学术数据说明](https://help.electricitymaps.com/en/articles/13168512-academic-data-access-and-availability)。
-
-Electricity Maps 的许可不允许本项目公开再分发这些小时数据，因此 GitHub 仓库不包含 `dataset/EM-CPNDCNZ.zip` 或其解压内容。合资格研究人员应通过 Electricity Maps 官方渠道独立申请访问，并确保用途符合其最新条款。小时数据不适用本项目的 MIT 软件许可证。
+研究使用经授权的 2025 年 Electricity Maps 数据作为相对小时形状，并缩放至 [`dataset/Factors.py`](dataset/Factors.py) 中的年度路径。处理后的小时文件不公开分发。合资格研究人员需通过 Electricity Maps [数据页面](https://www.electricitymaps.com/data)或[学术访问说明](https://help.electricitymaps.com/en/articles/13168512-academic-data-access-and-availability)独立申请，并遵守最新许可条款。
 
 ## 项目结构
 
 ```text
 .
 ├── core/
+│   ├── annual_cpu_model.py
+│   ├── hourly_workload_resolved_model.py
 │   ├── past_research_data_center_energy_carbon_model.py
-│   │                                      # 过去研究中的能耗碳排放方法
-│   ├── m1_annual_cpu_model.py          # M1：年度 CPU + 年度碳因子
-│   ├── m2_hourly_carbon_cpu_model.py   # M2：年度 CPU + 小时碳因子
-│   ├── m3_annual_gpu_model.py          # M3：GPU 能耗 + 年度碳因子
-│   ├── m4_hourly_gpu_model.py          # M4：GPU 能耗 + 小时碳因子
-│   └── task_model.py                   # M1—M4 共用任务分类口径
+│   └── task_model.py
 ├── dataset/
-│   ├── Factors.py                      # 年度碳因子与 PUE
-│   ├── Installed_capacity_data.py      # 容量、国家份额与 AI 校准因子
-│   ├── EM-CPNDCNZ/                     # 经许可取得并在本地准备的小时碳强度；不纳入 Git
-│   ├── validation/                     # MLPerf 与国家统计验证输入及说明
-│   ├── asi_opensource_pod_hourly/      # GPU Pod 小时轨迹
-│   └── asi_opensource_server_hourly/   # 服务器小时轨迹
-├── results/                            # 默认模型输出及 Figure 1–4 源数据工作簿
-├── scripts/                            # 分析、绘图和外部验证脚本
-├── run.py                              # 一次运行 M1—M4 并生成对比汇总
-├── LICENSE                             # MIT 许可证
-└── README.md
+│   ├── Factors.py
+│   ├── Installed_capacity_data.py
+│   ├── EM-CPNDCNZ/                    # 本地授权小时输入
+│   ├── validation/
+│   ├── asi_opensource_pod_hourly/     # 外部本地输入
+│   └── asi_opensource_server_hourly/  # 外部本地输入
+├── results/                           # 生成结果与论文图源数据
+├── scripts/
+│   ├── figure1_data.py
+│   ├── figure2_data.py
+│   ├── figure3_data.py
+│   ├── figure4_data.py
+│   └── validate_energy_model.py
+├── run.py                             # 两端点比较入口
+├── LICENSE
+├── README.md
+└── README.zh-CN.md
 ```
 
 ## 环境与依赖
 
-论文提交包已在 Python 3.12.3 下验证。为固定复现环境，请使用以下精确依赖版本：
+投稿复现包使用 Python 3.12.3，并固定以下版本：
 
-- `numpy==2.1.3`；
-- `pandas==2.2.3`；
-- `pyarrow==17.0.0`，用于读取 Parquet 格式的 Alibaba 轨迹；
-- `openpyxl==3.1.5`，用于读取论文图表源数据工作簿；
-- `matplotlib==3.9.2`，用于生成验证图。
+- `numpy==2.1.3`
+- `pandas==2.2.3`
+- `pyarrow==17.0.0`
+- `openpyxl==3.1.5`
+- `matplotlib==3.9.2`
 
-可在项目根目录创建独立环境并安装依赖：
+在仓库根目录创建环境：
 
 ```powershell
 python -m venv .venv
@@ -157,15 +170,15 @@ python -m pip install --upgrade pip
 python -m pip install numpy==2.1.3 pandas==2.2.3 pyarrow==17.0.0 openpyxl==3.1.5 matplotlib==3.9.2
 ```
 
-Linux 或 macOS 下激活环境：
+Linux 或 macOS：
 
 ```bash
 source .venv/bin/activate
 ```
 
-## 数据准备
+## 外部数据准备
 
-受许可限制的小时碳强度数据及体积较大的 GPU 轨迹不随仓库分发。以下本地输入已被 `.gitignore` 排除：
+下列受限或外部本地输入由 `.gitignore` 排除：
 
 ```text
 dataset/EM-CPNDCNZ.zip
@@ -174,7 +187,7 @@ dataset/asi_opensource_pod_hourly/
 dataset/asi_opensource_server_hourly/
 ```
 
-运行 M2 或 M4 前，用户需通过 Electricity Maps 的[数据页面](https://www.electricitymaps.com/data)或[学术数据申请说明](https://help.electricitymaps.com/en/articles/13168512-academic-data-access-and-availability)自行取得许可数据，并按上述研究方法准备未来情景文件后放入 `dataset/EM-CPNDCNZ/`。运行 M3 或 M4 还需按 Alibaba Cluster Trace Program 的公开说明准备两类 ASI Parquet 轨迹。预期目录示例如下：
+预期目录：
 
 ```text
 dataset/
@@ -191,67 +204,59 @@ dataset/
     └── day=0/hour=00/part-000.parquet
 ```
 
-`United_Kingdom` 在模型国家键中对应小时数据目录 `Great Britain`。
+模型键 `United_Kingdom` 对应小时数据目录 `Great Britain`。
 
-## 快速开始
+## 运行分析
 
-所有命令均建议从项目根目录执行。
+所有命令均从仓库根目录执行。
 
-### 一次运行 M1—M4 并汇总
-
-使用根目录下的统一入口运行四个 case：
+### 比较两个端点模型
 
 ```powershell
 python run.py --policy CP --scenarios Base --year-start 2026 --years 5
 ```
 
-多个情景可以同时传入；带空格的情景名需要加引号：
+入口程序读取一次工作负载轨迹，运行年度 CPU 端点和小时级工作负载解析端点，并将结果写入 `results/model_comparison/`。可同时指定多个需求路径：
 
 ```powershell
 python run.py --policy NDC --scenarios Base "Lift-Off" "High Efficiency"
 ```
 
-统一入口先把 Alibaba GPU 轨迹构建为一个内存中的 `WorkloadProfile`，随后将同一个对象传给 M3 和 M4。因此两类大型 Parquet 轨迹只读取一次，M3 的年度碳因子计算和 M4 的小时碳因子计算仍分别执行。默认结果写入 `results/m1_m4_comparison/`。
-
-快速检查环境时可以限制轨迹小时数和国家范围：
+快速执行检查可限制国家和轨迹小时数：
 
 ```powershell
 python run.py --countries USA --year-start 2026 --years 1 --max-intervals 24
 ```
 
-`max_intervals` 会改变轨迹统计口径，只能用于调试，正式结果应省略该参数。运行 `python run.py --help` 可查看完整参数。
+`max_intervals` 会改变轨迹采样基础，仅用于 smoke test 和调试；生成论文结果时必须省略。
 
-### 外部验证与论文图表源数据
-
-外部验证输入位于 `dataset/validation/`，验证脚本为 `scripts/validate_energy_model.py`。从项目根目录运行：
+### 生成论文图源数据
 
 ```powershell
-python scripts\validate_energy_model.py --bootstrap-replicates 10000
+python scripts/figure1_data.py
+python scripts/figure2_data.py
+python scripts/figure3_data.py
+python scripts/figure4_data.py
 ```
 
-脚本使用固定随机种子 `20260819`，将诊断表写入 `results/model_validation/`，并将补充验证图写入 `figures/`。验证数据来源、筛选口径和国家统计边界见 `dataset/validation/README.md`。
+图 3 脚本是有序 bridge 的权威实现。写入工作簿前，它会检查配置覆盖、国家聚合、小时—年度能耗闭合以及 bridge 加和闭合。
 
-论文主图的现有源数据工作簿保存在：
-
-- `results/figure1_data.xlsx`：Figure 1a–g；
-- `results/figure2_data.xlsx`：Figure 2a–d 及 Figure 2b 的完整国家级来源表；
-- `results/figure3_data.xlsx`：Figure 3a–d；
-- `results/figure4_data.xlsx`：Figure 4a。
-
-这四个工作簿是论文图表的分析后源数据；`results/` 下其他运行输出仍由 `.gitignore` 排除。
-
-### 运行 M1
+### 运行外部诊断
 
 ```powershell
-python -m core.m1_annual_cpu_model
+python scripts/validate_energy_model.py --bootstrap-replicates 10000
 ```
 
-或在 Python 中指定情景：
+诊断流程使用固定随机种子 `20260819`。输入来源和筛选规则记录在 [`dataset/validation/`](dataset/validation/) 中。
+
+## Python 接口
+
+### 年度 CPU 模型
 
 ```python
-from core.m1_annual_cpu_model import run_m1_annual_cpu_model
+from core.annual_cpu_model import run_annual_cpu_model
 
-result = run_m1_annual_cpu_model(
+result = run_annual_cpu_model(
     renewable_energy_policy="CP",
     scenarios=["Base", "Lift-Off"],
     year_start=2026,
@@ -259,42 +264,10 @@ result = run_m1_annual_cpu_model(
 )
 ```
 
-### 运行 M2
+### 小时级工作负载解析模型
 
 ```python
-from core.m2_hourly_carbon_cpu_model import run_m2_hourly_carbon_cpu_model
-
-result = run_m2_hourly_carbon_cpu_model(
-    renewable_energy_policy="NDC",
-    scenarios=["Base"],
-    year_start=2026,
-    years=5,
-    hourly_carbon_scope="direct",
-    save_hourly_outputs=False,
-)
-```
-
-`hourly_carbon_scope` 可选 `direct` 或 `life_cycle`。默认只保存国家和全球年度汇总；设置 `save_hourly_outputs=True` 后会额外保存逐小时结果，文件可能较大。
-
-### 运行 M3
-
-```python
-from core.m3_annual_gpu_model import run_m3_annual_gpu_model
-
-result = run_m3_annual_gpu_model(
-    renewable_energy_policy="NZ",
-    scenarios=["High Efficiency"],
-    year_start=2026,
-    years=5,
-)
-```
-
-M3 需要读取 GPU 轨迹，但碳排放只使用年度碳因子，不生成小时碳排放表。
-
-### 运行 M4
-
-```python
-from core.m4_hourly_gpu_model import run_workload_component_footprint
+from core.hourly_workload_resolved_model import run_workload_component_footprint
 
 result = run_workload_component_footprint(
     renewable_energy_policy="CP",
@@ -305,88 +278,55 @@ result = run_workload_component_footprint(
 )
 ```
 
-完整轨迹包含大量 Parquet 分区。首次检查环境或调试接口时，可用 `max_intervals` 限制读取的轨迹小时数：
-
-```python
-result = run_workload_component_footprint(
-    renewable_energy_policy="CP",
-    scenarios=["Base"],
-    countries=["USA"],
-    year_start=2026,
-    years=1,
-    max_intervals=24,
-    save_outputs=False,
-)
-```
-
-`max_intervals` 仅适合烟雾测试和调试，不应直接用于正式论文结果。
+小时接口的 `hourly_carbon_scope` 可设为 `direct` 或 `life_cycle`。小时 CSV 默认不保存，以避免生成过大的文件。
 
 ## 主要参数
 
 | 参数 | 含义 | 常用值或默认值 |
 | --- | --- | --- |
-| `renewable_energy_policy` | 电力系统路径 | `CP`、`NDC`、`NZ` |
-| `scenarios` | AI 数据中心需求情景 | `Base`、`Lift-Off`、`High Efficiency`、`Headwinds` |
-| `year_start` | 输出起始年份 | M1/M2 支持 2025—2030，M3/M4 默认 2026 |
-| `years` | 连续计算年份数 | 默认 5 |
-| `countries` | 参与核算的国家 | 默认 24 国 |
-| `pue_scale` | PUE 敏感性缩放系数 | `1.0` |
-| `ai_capacity_factors` | 各年份 AI 容量校准因子 | 默认读取 `DEFAULT_AI_CAPACITY_FACTORS` |
-| `hourly_carbon_scope` | 小时碳强度口径 | `direct` 或 `life_cycle` |
-| `hourly_carbon_fallback_to_annual` | 小时数据缺失时是否回退到年度因子 | `True` |
-| `max_intervals` | 限制 GPU 轨迹读取小时数 | 默认读取全部轨迹 |
-| `default_p_infer` | M1/M2 默认推理任务比例 | `0.75` |
-| `default_p_other` | M1/M2 默认其他任务比例 | `0.05` |
-| `task_ratio_by_country` | M1/M2 国家级四类任务比例覆盖 | 默认不覆盖 |
-| `include_zero_gpu_pods` | M3/M4 是否把零 GPU 请求的 CPU-only Pod 纳入能耗边界 | `True`；设为 `False` 仅用于 GPU-bearing Pod 敏感性分析 |
+| `renewable_energy_policy` | 电力系统路径 | `CP`、`NDC` 或 `NZ` |
+| `scenarios` | 需求路径 | `Base`、`Lift-Off`、`High Efficiency` 或 `Headwinds` |
+| `year_start` | 输出起始年份 | 原稿分析为 2026 |
+| `years` | 连续年份数 | 5 |
+| `countries` | 模型覆盖国家 | 默认全部 24 国 |
+| `pue_scale` | PUE 敏感性乘数 | `1.0` |
+| `ai_capacity_factors` | 年度 AI 容量校准 | `DEFAULT_AI_CAPACITY_FACTORS` |
+| `hourly_carbon_scope` | 小时碳强度边界 | `direct` 或 `life_cycle` |
+| `hourly_carbon_fallback_to_annual` | 小时文件缺失时使用年度因子 | `True` |
+| `capacity_quantile` | 轨迹容量清单分位数 | `0.96` |
+| `max_resource_utilization` | 归一化资源利用率上限 | `1.0` |
+| `max_intervals` | smoke test 的轨迹小时限制 | 默认使用完整轨迹 |
+| `include_zero_gpu_pods` | 能耗边界是否保留 CPU-only Pod | `True` |
 
-M1/M2 还允许调整训练、推理和其他任务占比及利用率，以及空闲功率率与最大功率率；M3/M4 允许通过 `HardwarePowerConfig` 和 `Alibaba2026TraceConfig` 调整硬件功率与轨迹处理参数。
+年度 CPU 模型还提供固定任务比例、任务利用率、空闲功率率和最大功率率参数。小时模型通过 `HardwarePowerConfig` 与 `Alibaba2026TraceConfig` 暴露部件功率和轨迹处理假设。
 
 ## 输出结果
 
-默认输出写入 `results/` 下的模型专属目录。
+端点比较入口写入：
 
-### 统一运行与模型对比
+```text
+results/model_comparison/
+├── annual_cpu_model/
+├── hourly_workload_resolved_model/
+└── summary/
+    ├── Endpoint_Models_Country_Annual.csv
+    ├── Endpoint_Models_Global_Annual.csv
+    ├── Endpoint_Comparison_Country_Annual.csv
+    └── Endpoint_Comparison_Global_Annual.csv
+```
 
-`run.py` 将每个模型的原始结果分别写入 `results/m1_m4_comparison/m1_annual_cpu/` 至 `m4_hourly_gpu/`，并在 `summary/` 中生成：
+比较表报告年度 CPU 模型相对于小时级工作负载解析端点的差值。正百分比表示年度结果高于小时参考配置。
 
-- `All_Models_Country_Annual.csv`：M1—M4 国家年度统一长表；
-- `All_Models_Global_Annual.csv`：M1—M4 全球年度统一长表；
-- `Model_Comparison_Country_Annual.csv`：国家年度并排对比表；
-- `Model_Comparison_Global_Annual.csv`：全球年度并排对比表。
+小时模型可返回或保存：
 
-并排对比表包含四个模型的用电量、负荷加权碳因子和碳排放，并为 M1—M3 提供相对 M4 的绝对差与百分比差。百分比按 `(模型结果 - M4) / M4 × 100%` 计算，正值表示高于 M4。
-
-### M1
-
-- `M1_Country_Annual.csv`：国家年度用电和碳排放；
-- `M1_Global_Annual.csv`：全球年度汇总；
-- `M1_Country_TaskType_Energy.csv`：国家年度任务分类能耗和碳排放。
-
-### M2
-
-- `M2_Country_Annual.csv`：国家年度用电和小时匹配后的碳排放；
-- `M2_Global_Annual.csv`：全球年度汇总；
-- `M2_Country_TaskType_Energy.csv`：国家年度任务分类能耗和小时匹配后的碳排放；
-- `M2_Country_Hourly.csv`：可选的国家逐小时结果。
-
-### M3
-
-- `M3_Country_Annual.csv`：国家年度 GPU 模型结果；
-- `M3_Global_Annual.csv`：全球年度汇总。
-
-### M4
-
-M4 返回并可保存以下主要结果表：
-
-- `annual_summary`：国家年度能耗、碳排放和资源利用率；
-- `component_energy`：CPU、GPU、内存、存储和 IT 风扇分项能耗；
+- `annual_summary`：国家—年份用电、排放和资源利用；
+- `component_energy`：CPU、GPU、内存、存储和 IT 风扇能耗；
 - `task_type_energy`：训练、推理、其他和未分类任务能耗；
-- `task_demand` 与 `task_execution`：任务来源和执行地的资源小时；
+- `task_demand`、`task_execution`：按任务来源与执行位置统计的资源小时；
 - `capacity_overflow`：资源容量溢出诊断；
-- `hourly_carbon`：可选的国家小时用电、碳因子和碳排放；
-- `workload_profile_summary`：轨迹工作负载汇总，同时报告全部任务占比、排除未分类后的 `used_gpu_hours` 占比，以及 Alibaba 论文复现窗口口径的验证占比；
-- `trace_resource_capacity`：轨迹容量估算及其来源。
+- `hourly_carbon`：小时用电、碳强度和排放；
+- `workload_profile_summary`：不同报告口径下的工作负载结构；
+- `trace_resource_capacity`：轨迹容量估计及来源。
 
 ### 单位
 
@@ -399,17 +339,18 @@ M4 返回并可保存以下主要结果表：
 | `_tco2` | t CO₂ |
 | `_mtco2` | Mt CO₂ |
 
-## 方法假设与注意事项
+## 解释边界
 
-- 研究期容量数据仅覆盖 2025—2030 年，请勿在没有新增输入数据的情况下外推到范围之外。
-- 24 国 IT 容量份额在当前实现中来自 `IT_RATIO`；如采用固定份额，应在论文中说明其局限性。
-- M2 将年度用电表示为恒定小时功率，因此只检验小时碳因子变化，不表达训练或推理的日内负荷变化。
-- Alibaba 公开轨迹是相对时间轨迹。M3/M4 将其年化到 8760 小时，并在匹配未来日历年份时重复相对小时形状。
-- GPU 模型中的硬件功率份额、单位满载功率、空闲功率和风扇曲线是可配置参数，应结合实测数据开展敏感性和不确定性分析。
-- M4 的年度结果可能掩盖国家小时级正负偏差抵消，正式分析应同时检查国家与全球尺度。
-- 小时因子缺失时默认回退到年度因子。正式核算前应检查输出中的 `carbon_factor_source`，避免将回退结果误认为真实小时数据。
-- 完整 GPU 轨迹体积很大，正式运行需要足够的磁盘空间、内存和处理时间。
+- 容量输入覆盖 2025—2030 年，没有新证据时不应外推。
+- 固定国家份额不表达跨地区迁移、国家份额变化或剩余全球容量份额。
+- 所有国家共用相同的归一化相对负荷形状；模型不表达时区和逐国任务结构差异。
+- 4,440 小时 Alibaba 轨迹会重复至 8,760 小时。拼接边界不改变年度能耗，但可能决定未过滤的最大爬坡。
+- 未来小时电网序列保留 2025 年相对形状，不预测调度、储能、进口和可变电源结构变化。
+- 部件份额、单位功率、空闲比例、风扇响应、内存活动和存储活动均为可配置参考假设。
+- MLPerf 诊断仅检查功率量级和偏差，不是校准拟合，也不验证未来国家级设施用电。
+- 缺失小时碳数据时可以回退到年度因子；解释时间结果前应检查 `carbon_factor_source`。
+- 小时级工作负载解析端点是透明参考配置，不是实测真值。
 
 ## 许可证
 
-本项目代码采用 [MIT License](LICENSE)。外部数据集不自动适用本项目的软件许可证；Alibaba、IEA、Electricity Maps 及其他数据来源的使用、引用和再分发应分别遵循其原始许可与服务条款。
+项目代码采用 [MIT License](LICENSE)。第三方数据仍受各原始提供方的访问、引用和再分发条款约束。

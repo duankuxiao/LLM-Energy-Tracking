@@ -38,7 +38,7 @@ def calculate_past_research_energy_carbon(
     """
     Calculate annual data-centre energy use and carbon emissions.
 
-    This is the traditional method used as the M1/M2 hardware baseline. It
+    This is the traditional method used as the annual CPU-model baseline. It
     allocates global IT capacity to countries, applies a linear
     utilization--power relationship, converts IT energy to facility energy
     with PUE, and applies annual country carbon factors.

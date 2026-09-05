@@ -22,7 +22,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from core.m4_hourly_gpu_model import (
+from core.hourly_workload_resolved_model import (
     WorkloadProfile,
     build_workload_profile,
     run_workload_component_footprint,
@@ -378,7 +378,10 @@ def generate_figure2_data(
     annual_frames = []
     for policy in POLICIES:
         if verbose:
-            print(f"[figure2] Calculating M4 results for {policy}.", flush=True)
+            print(
+                f"[figure2] Calculating hourly workload-resolved results for {policy}.",
+                flush=True,
+            )
         annual_frames.append(
             _run_policy(
                 policy=policy,

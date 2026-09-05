@@ -1,17 +1,17 @@
 """Generate the calculation results required by Figure 3.
 
-Figure 3 compares only the legacy annual aggregate baseline (M1) with the
-trace-driven, GPU-aware hourly model (M4).  Intermediate numbered models are
-not constructed.  Instead, an additive bridge identifies how the result
-changes as M1 is progressively replaced by the M4 representation:
+Figure 3 compares the conventional annual CPU baseline with the trace-driven,
+component-level hourly workload-resolved model. An additive bridge identifies
+how the result changes as the annual representation is progressively replaced
+by the hourly representation:
 
 1. component power configuration under the legacy task/load assumptions;
 2. trace-derived mean workload instead of fixed task/load assumptions;
 3. hourly workload variability instead of a flat trace-derived workload; and
 4. hourly carbon matching instead of annual-average carbon factors.
 
-The four signed effects are calculated in the M1-to-M4 direction and must sum
-to the direct M4-minus-M1 difference.  All calculations are fixed to Base-CP
+The four signed effects are calculated in the annual-to-hourly direction and
+must sum to the direct hourly-minus-annual difference. All calculations are fixed to Base-CP
 for 2026--2030 and the default 24-country boundary.  The workbook also reports
 the peak/ramp information that an annual model cannot represent.  The script
 contains no plotting code and does not export intermediate calculation or
@@ -32,8 +32,8 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from core.m1_annual_cpu_model import run_m1_annual_cpu_model
-from core.m4_hourly_gpu_model import (
+from core.annual_cpu_model import run_annual_cpu_model
+from core.hourly_workload_resolved_model import (
     RESOURCES,
     WorkloadProfile,
     build_workload_profile,
@@ -52,29 +52,30 @@ FIGURE_YEAR_END = 2030
 FIGURE_YEARS = FIGURE_YEAR_END - FIGURE_YEAR_START + 1
 DETAIL_YEAR = 2030
 POLICIES = (FIGURE_POLICY,)
-MODEL_ORDER = ("M1", "M4")
+MODEL_ORDER = ("annual_cpu_model", "hourly_workload_resolved_model")
 
-M1_VARIANT = "M1_baseline"
-POWER_CONFIGURATION_VARIANT = "M4_power_with_legacy_load"
-MEAN_WORKLOAD_VARIANT = "M4_flat_trace_annual_carbon"
-HOURLY_WORKLOAD_VARIANT = "M4_trace_annual_carbon"
-M4_VARIANT = "M4_trace_hourly_carbon"
+ANNUAL_BASELINE_VARIANT = "annual_cpu_baseline"
+POWER_CONFIGURATION_VARIANT = "component_power_with_legacy_load"
+MEAN_WORKLOAD_VARIANT = "flat_trace_annual_carbon"
+HOURLY_WORKLOAD_VARIANT = "hourly_trace_annual_carbon"
+HOURLY_REFERENCE_VARIANT = "hourly_trace_hourly_carbon"
 VARIANT_ORDER = (
-    M1_VARIANT,
+    ANNUAL_BASELINE_VARIANT,
     POWER_CONFIGURATION_VARIANT,
     MEAN_WORKLOAD_VARIANT,
     HOURLY_WORKLOAD_VARIANT,
-    M4_VARIANT,
+    HOURLY_REFERENCE_VARIANT,
 )
 
 EFFECT_STEPS = (
     (
         "power_configuration",
-        M1_VARIANT,
+        ANNUAL_BASELINE_VARIANT,
         POWER_CONFIGURATION_VARIANT,
         (
             "Replace the legacy aggregate utilization-power equation with the "
-            "M4 component power configuration while retaining M1 task shares "
+            "component power configuration while retaining the annual CPU "
+            "model's task shares "
             "and fixed utilization assumptions."
         ),
     ),
@@ -83,7 +84,7 @@ EFFECT_STEPS = (
         POWER_CONFIGURATION_VARIANT,
         MEAN_WORKLOAD_VARIANT,
         (
-            "Replace M1 task shares and fixed utilization assumptions with the "
+            "Replace the annual CPU model's task shares and fixed utilization assumptions with the "
             "trace-derived mean task-resource workload; keep the workload flat "
             "over time and retain annual-average carbon factors."
         ),
@@ -100,10 +101,10 @@ EFFECT_STEPS = (
     (
         "hourly_carbon_matching",
         HOURLY_WORKLOAD_VARIANT,
-        M4_VARIANT,
+        HOURLY_REFERENCE_VARIANT,
         (
             "Replace annual-average carbon factors with hourly carbon factors "
-            "while retaining the full trace-driven M4 energy profile."
+            "while retaining the full trace-driven energy profile."
         ),
     ),
 )
@@ -236,7 +237,7 @@ def _derive_annual_carbon_variant(
     return _standardize_result(
         result,
         variant=variant,
-        model="M4",
+        model="hourly_workload_resolved_model",
         policy=policy,
     )
 
@@ -280,7 +281,7 @@ def _flat_workload_profile(profile: WorkloadProfile) -> WorkloadProfile:
 
 
 def _legacy_activity(year: int, model_year_end: int) -> np.ndarray:
-    """Return the M1 task activity coefficients for one calendar year."""
+    """Return the annual CPU model's task activity coefficients for one year."""
     native_year_count = model_year_end - DATA_YEAR_START + 1
     year_index = year - DATA_YEAR_START
     if native_year_count <= 0 or not 0 <= year_index < native_year_count:
@@ -309,11 +310,11 @@ def _legacy_assumption_profile(
     year: int,
     model_year_end: int,
 ) -> WorkloadProfile:
-    """Build a flat profile with the task/load assumptions used by M1.
+    """Build a flat profile with the annual CPU model's task/load assumptions.
 
-    The normalized load for every resource equals the M1 task ratio multiplied
+    The normalized load for every resource equals the annual-model task ratio multiplied
     by its annual activity and assumed utilization.  Passing this profile
-    through M4 changes the power/configuration layer while retaining the M1
+    through the component model changes the power layer while retaining the annual
     task and utilization assumptions.
     """
     ratios = np.array([LEGACY_TASK_RATIOS[task] for task in TASK_TYPES], dtype=float)
@@ -331,7 +332,7 @@ def _legacy_assumption_profile(
     return _copy_profile_with_load(profile, load)
 
 
-def _run_m4_variant(
+def _run_hourly_variant(
     *,
     variant: str,
     policy: str,
@@ -373,7 +374,7 @@ def _run_m4_variant(
     annual = _standardize_result(
         result["annual_summary"],
         variant=variant,
-        model="M4",
+        model="hourly_workload_resolved_model",
         policy=policy,
     )
     if not return_hourly:
@@ -387,7 +388,7 @@ def _run_m4_variant(
         "facility_energy_mwh",
     ]].copy()
     if hourly.empty:
-        raise AssertionError("The requested M4 hourly energy table is empty.")
+        raise AssertionError("The requested hourly energy table is empty.")
     return annual, hourly
 
 
@@ -445,8 +446,8 @@ def _collect_variant_results(
 
     for policy in POLICIES:
         if verbose:
-            print(f"[figure3] Calculating M1 baseline for {policy}.", flush=True)
-        m1_result = run_m1_annual_cpu_model(
+            print(f"[figure3] Calculating annual CPU baseline for {policy}.", flush=True)
+        annual_cpu_result = run_annual_cpu_model(
             renewable_energy_policy=policy,
             scenarios=scenarios,
             years=years,
@@ -457,9 +458,9 @@ def _collect_variant_results(
         )
         all_frames.append(
             _standardize_result(
-                m1_result["annual_summary"],
-                variant=M1_VARIANT,
-                model="M1",
+                annual_cpu_result["annual_summary"],
+                variant=ANNUAL_BASELINE_VARIANT,
+                model="annual_cpu_model",
             )
         )
 
@@ -474,7 +475,7 @@ def _collect_variant_results(
                 flush=True,
             )
         flat_energy_frames.append(
-            _run_m4_variant(
+            _run_hourly_variant(
                 variant=MEAN_WORKLOAD_VARIANT,
                 policy=FIGURE_POLICY,
                 scenario=scenario,
@@ -497,7 +498,7 @@ def _collect_variant_results(
         for year in range(year_start, year_start + years):
             if verbose:
                 print(
-                    f"[figure3] Calculating M4 power with legacy load for "
+                    f"[figure3] Calculating component power with annual-model load for "
                     f"{scenario} x {year}.",
                     flush=True,
                 )
@@ -507,7 +508,7 @@ def _collect_variant_results(
                 model_year_end=model_year_end,
             )
             legacy_energy_frames.append(
-                _run_m4_variant(
+                _run_hourly_variant(
                     variant=POWER_CONFIGURATION_VARIANT,
                     policy=FIGURE_POLICY,
                     scenario=scenario,
@@ -551,14 +552,14 @@ def _collect_variant_results(
         for scenario in scenarios:
             if verbose:
                 print(
-                    f"[figure3] Calculating full M4 for {scenario} x {policy}.",
+                    f"[figure3] Calculating the hourly reference for {scenario} x {policy}.",
                     flush=True,
                 )
             capture_hourly = (
                 policy == FIGURE_POLICY and scenario == FIGURE_SCENARIO
             )
-            m4_output = _run_m4_variant(
-                variant=M4_VARIANT,
+            hourly_output = _run_hourly_variant(
+                variant=HOURLY_REFERENCE_VARIANT,
                 policy=policy,
                 scenario=scenario,
                 countries=countries,
@@ -577,21 +578,21 @@ def _collect_variant_results(
                 return_hourly=capture_hourly,
             )
             if capture_hourly:
-                if not isinstance(m4_output, tuple):
-                    raise AssertionError("Base-CP M4 hourly output was not captured.")
-                m4_hourly, base_cp_hourly = m4_output
+                if not isinstance(hourly_output, tuple):
+                    raise AssertionError("Base-CP hourly output was not captured.")
+                hourly_reference, base_cp_hourly = hourly_output
             else:
-                if isinstance(m4_output, tuple):
+                if isinstance(hourly_output, tuple):
                     raise AssertionError("Unexpected hourly output for non-Base-CP run.")
-                m4_hourly = m4_output
+                hourly_reference = hourly_output
             all_frames.append(
                 _derive_annual_carbon_variant(
-                    m4_hourly,
+                    hourly_reference,
                     variant=HOURLY_WORKLOAD_VARIANT,
                     policy=policy,
                 )
             )
-            all_frames.append(m4_hourly)
+            all_frames.append(hourly_reference)
 
     results = pd.concat(all_frames, ignore_index=True)
     _validate_variant_coverage(
@@ -614,7 +615,11 @@ def _collect_variant_results(
 
 
 def _global_model_comparison(variant_results: pd.DataFrame) -> pd.DataFrame:
-    selected = variant_results[variant_results["variant"].isin((M1_VARIANT, M4_VARIANT))]
+    selected = variant_results[
+        variant_results["variant"].isin(
+            (ANNUAL_BASELINE_VARIANT, HOURLY_REFERENCE_VARIANT)
+        )
+    ]
     keys = ["scenario", "policy", "year"]
     global_results = selected.groupby(
         ["variant", "model", *keys], as_index=False, observed=True
@@ -622,26 +627,28 @@ def _global_model_comparison(variant_results: pd.DataFrame) -> pd.DataFrame:
     global_results = _recalculate_summary_metrics(global_results)
 
     reference = global_results.loc[
-        global_results["variant"] == M4_VARIANT,
+        global_results["variant"] == HOURLY_REFERENCE_VARIANT,
         keys + ["facility_energy_mwh", "carbon_tco2"],
     ].rename(
         columns={
-            "facility_energy_mwh": "m4_facility_energy_mwh",
-            "carbon_tco2": "m4_carbon_tco2",
+            "facility_energy_mwh": "hourly_reference_facility_energy_mwh",
+            "carbon_tco2": "hourly_reference_carbon_tco2",
         }
     )
     result = global_results.merge(reference, on=keys, validate="many_to_one")
-    result["energy_difference_vs_m4_mwh"] = (
-        result["facility_energy_mwh"] - result["m4_facility_energy_mwh"]
+    result["energy_difference_vs_hourly_reference_mwh"] = (
+        result["facility_energy_mwh"]
+        - result["hourly_reference_facility_energy_mwh"]
     )
-    result["energy_difference_vs_m4_pct"] = _relative_difference(
-        result["facility_energy_mwh"], result["m4_facility_energy_mwh"]
+    result["energy_difference_vs_hourly_reference_pct"] = _relative_difference(
+        result["facility_energy_mwh"],
+        result["hourly_reference_facility_energy_mwh"],
     )
-    result["carbon_difference_vs_m4_tco2"] = (
-        result["carbon_tco2"] - result["m4_carbon_tco2"]
+    result["carbon_difference_vs_hourly_reference_tco2"] = (
+        result["carbon_tco2"] - result["hourly_reference_carbon_tco2"]
     )
-    result["carbon_difference_vs_m4_pct"] = _relative_difference(
-        result["carbon_tco2"], result["m4_carbon_tco2"]
+    result["carbon_difference_vs_hourly_reference_pct"] = _relative_difference(
+        result["carbon_tco2"], result["hourly_reference_carbon_tco2"]
     )
     model_order = pd.CategoricalDtype(MODEL_ORDER, ordered=True)
     result["model"] = result["model"].astype(model_order)
@@ -682,30 +689,41 @@ def _country_effect_decomposition(variant_results: pd.DataFrame) -> pd.DataFrame
         frame["carbon_effect_tco2"] = (
             frame["target_carbon_tco2"] - frame["source_carbon_tco2"]
         )
-        frame["m4_facility_energy_mwh"] = energy[M4_VARIANT].to_numpy(dtype=float)
-        frame["m4_carbon_tco2"] = carbon[M4_VARIANT].to_numpy(dtype=float)
-        frame["m1_facility_energy_mwh"] = energy[M1_VARIANT].to_numpy(dtype=float)
-        frame["m1_carbon_tco2"] = carbon[M1_VARIANT].to_numpy(dtype=float)
-        frame["total_m4_minus_m1_energy_mwh"] = (
-            frame["m4_facility_energy_mwh"] - frame["m1_facility_energy_mwh"]
+        frame["hourly_reference_facility_energy_mwh"] = energy[
+            HOURLY_REFERENCE_VARIANT
+        ].to_numpy(dtype=float)
+        frame["hourly_reference_carbon_tco2"] = carbon[
+            HOURLY_REFERENCE_VARIANT
+        ].to_numpy(dtype=float)
+        frame["annual_baseline_facility_energy_mwh"] = energy[
+            ANNUAL_BASELINE_VARIANT
+        ].to_numpy(dtype=float)
+        frame["annual_baseline_carbon_tco2"] = carbon[
+            ANNUAL_BASELINE_VARIANT
+        ].to_numpy(dtype=float)
+        frame["total_hourly_minus_annual_energy_mwh"] = (
+            frame["hourly_reference_facility_energy_mwh"]
+            - frame["annual_baseline_facility_energy_mwh"]
         )
-        frame["total_m4_minus_m1_carbon_tco2"] = (
-            frame["m4_carbon_tco2"] - frame["m1_carbon_tco2"]
+        frame["total_hourly_minus_annual_carbon_tco2"] = (
+            frame["hourly_reference_carbon_tco2"]
+            - frame["annual_baseline_carbon_tco2"]
         )
         records.append(frame)
 
     result = pd.concat(records, ignore_index=True)
-    result["energy_effect_pct_of_m4"] = np.divide(
+    result["energy_effect_pct_of_hourly_reference"] = np.divide(
         result["energy_effect_mwh"].to_numpy(dtype=float) * 100.0,
-        result["m4_facility_energy_mwh"].to_numpy(dtype=float),
+        result["hourly_reference_facility_energy_mwh"].to_numpy(dtype=float),
         out=np.full(len(result), np.nan),
-        where=result["m4_facility_energy_mwh"].to_numpy(dtype=float) != 0,
+        where=result["hourly_reference_facility_energy_mwh"].to_numpy(dtype=float)
+        != 0,
     )
-    result["carbon_effect_pct_of_m4"] = np.divide(
+    result["carbon_effect_pct_of_hourly_reference"] = np.divide(
         result["carbon_effect_tco2"].to_numpy(dtype=float) * 100.0,
-        result["m4_carbon_tco2"].to_numpy(dtype=float),
+        result["hourly_reference_carbon_tco2"].to_numpy(dtype=float),
         out=np.full(len(result), np.nan),
-        where=result["m4_carbon_tco2"].to_numpy(dtype=float) != 0,
+        where=result["hourly_reference_carbon_tco2"].to_numpy(dtype=float) != 0,
     )
 
     group_keys = ["scenario", "policy", "year", "country"]
@@ -717,11 +735,11 @@ def _country_effect_decomposition(variant_results: pd.DataFrame) -> pd.DataFrame
     ].transform("sum")
     result["energy_decomposition_check_mwh"] = (
         result["sum_of_energy_effects_mwh"]
-        - result["total_m4_minus_m1_energy_mwh"]
+        - result["total_hourly_minus_annual_energy_mwh"]
     )
     result["carbon_decomposition_check_tco2"] = (
         result["sum_of_carbon_effects_tco2"]
-        - result["total_m4_minus_m1_carbon_tco2"]
+        - result["total_hourly_minus_annual_carbon_tco2"]
     )
     return result.sort_values(
         ["scenario", "policy", "country", "year", "effect_order"],
@@ -753,14 +771,17 @@ def _annual_average_global_effects(effect_results: pd.DataFrame) -> pd.DataFrame
         source_carbon_tco2=("source_carbon_tco2", "sum"),
         target_carbon_tco2=("target_carbon_tco2", "sum"),
         carbon_effect_tco2=("carbon_effect_tco2", "sum"),
-        m4_facility_energy_mwh=("m4_facility_energy_mwh", "sum"),
-        m4_carbon_tco2=("m4_carbon_tco2", "sum"),
-        total_m4_minus_m1_energy_mwh=(
-            "total_m4_minus_m1_energy_mwh",
+        hourly_reference_facility_energy_mwh=(
+            "hourly_reference_facility_energy_mwh",
             "sum",
         ),
-        total_m4_minus_m1_carbon_tco2=(
-            "total_m4_minus_m1_carbon_tco2",
+        hourly_reference_carbon_tco2=("hourly_reference_carbon_tco2", "sum"),
+        total_hourly_minus_annual_energy_mwh=(
+            "total_hourly_minus_annual_energy_mwh",
+            "sum",
+        ),
+        total_hourly_minus_annual_carbon_tco2=(
+            "total_hourly_minus_annual_carbon_tco2",
             "sum",
         ),
     )
@@ -793,29 +814,40 @@ def _annual_average_global_effects(effect_results: pd.DataFrame) -> pd.DataFrame
         annual_avg_source_carbon_tco2=("source_carbon_tco2", "mean"),
         annual_avg_target_carbon_tco2=("target_carbon_tco2", "mean"),
         annual_avg_carbon_effect_tco2=("carbon_effect_tco2", "mean"),
-        annual_avg_m4_facility_energy_mwh=("m4_facility_energy_mwh", "mean"),
-        annual_avg_m4_carbon_tco2=("m4_carbon_tco2", "mean"),
-        annual_avg_total_m4_minus_m1_energy_mwh=(
-            "total_m4_minus_m1_energy_mwh",
+        annual_avg_hourly_reference_facility_energy_mwh=(
+            "hourly_reference_facility_energy_mwh",
             "mean",
         ),
-        annual_avg_total_m4_minus_m1_carbon_tco2=(
-            "total_m4_minus_m1_carbon_tco2",
+        annual_avg_hourly_reference_carbon_tco2=(
+            "hourly_reference_carbon_tco2",
+            "mean",
+        ),
+        annual_avg_total_hourly_minus_annual_energy_mwh=(
+            "total_hourly_minus_annual_energy_mwh",
+            "mean",
+        ),
+        annual_avg_total_hourly_minus_annual_carbon_tco2=(
+            "total_hourly_minus_annual_carbon_tco2",
             "mean",
         ),
     )
-    averaged["energy_effect_pct_of_m4"] = np.divide(
+    averaged["energy_effect_pct_of_hourly_reference"] = np.divide(
         averaged["annual_avg_energy_effect_mwh"].to_numpy(dtype=float) * 100.0,
-        averaged["annual_avg_m4_facility_energy_mwh"].to_numpy(dtype=float),
+        averaged[
+            "annual_avg_hourly_reference_facility_energy_mwh"
+        ].to_numpy(dtype=float),
         out=np.full(len(averaged), np.nan),
-        where=averaged["annual_avg_m4_facility_energy_mwh"].to_numpy(dtype=float)
+        where=averaged[
+            "annual_avg_hourly_reference_facility_energy_mwh"
+        ].to_numpy(dtype=float)
         != 0,
     )
-    averaged["carbon_effect_pct_of_m4"] = np.divide(
+    averaged["carbon_effect_pct_of_hourly_reference"] = np.divide(
         averaged["annual_avg_carbon_effect_tco2"].to_numpy(dtype=float) * 100.0,
-        averaged["annual_avg_m4_carbon_tco2"].to_numpy(dtype=float),
+        averaged["annual_avg_hourly_reference_carbon_tco2"].to_numpy(dtype=float),
         out=np.full(len(averaged), np.nan),
-        where=averaged["annual_avg_m4_carbon_tco2"].to_numpy(dtype=float) != 0,
+        where=averaged["annual_avg_hourly_reference_carbon_tco2"].to_numpy(dtype=float)
+        != 0,
     )
     bridge_keys = ["scenario", "policy"]
     averaged["sum_of_energy_effects_mwh"] = averaged.groupby(bridge_keys)[
@@ -826,11 +858,11 @@ def _annual_average_global_effects(effect_results: pd.DataFrame) -> pd.DataFrame
     ].transform("sum")
     averaged["energy_decomposition_check_mwh"] = (
         averaged["sum_of_energy_effects_mwh"]
-        - averaged["annual_avg_total_m4_minus_m1_energy_mwh"]
+        - averaged["annual_avg_total_hourly_minus_annual_energy_mwh"]
     )
     averaged["carbon_decomposition_check_tco2"] = (
         averaged["sum_of_carbon_effects_tco2"]
-        - averaged["annual_avg_total_m4_minus_m1_carbon_tco2"]
+        - averaged["annual_avg_total_hourly_minus_annual_carbon_tco2"]
     )
     return averaged.sort_values(
         ["scenario", "policy", "effect_order"],
@@ -870,13 +902,15 @@ def _peak_ramp_table(
     variant_results: pd.DataFrame,
     base_cp_hourly: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Return plotting data for the annual-mean and hourly M4 load profiles."""
+    """Return plotting data for the flat and hourly workload profiles."""
     is_base_cp = (variant_results["scenario"] == FIGURE_SCENARIO) & (
         variant_results["policy"] == FIGURE_POLICY
     )
     annual = variant_results.loc[
         is_base_cp
-        & variant_results["variant"].isin((MEAN_WORKLOAD_VARIANT, M4_VARIANT)),
+        & variant_results["variant"].isin(
+            (MEAN_WORKLOAD_VARIANT, HOURLY_REFERENCE_VARIANT)
+        ),
         ["variant", "year", "country", "facility_energy_mwh"],
     ].copy()
     hourly = base_cp_hourly.copy()
@@ -933,11 +967,11 @@ def _peak_ramp_table(
     hourly_annual = hourly.groupby(
         ["year", "country"], as_index=False, sort=True
     )["facility_energy_mwh"].sum()
-    m4_annual = annual.loc[
-        annual["variant"] == M4_VARIANT,
+    hourly_reference_annual = annual.loc[
+        annual["variant"] == HOURLY_REFERENCE_VARIANT,
         ["year", "country", "facility_energy_mwh"],
     ]
-    energy_check = m4_annual.merge(
+    energy_check = hourly_reference_annual.merge(
         hourly_annual,
         on=["year", "country"],
         how="outer",
@@ -951,7 +985,7 @@ def _peak_ramp_table(
         rtol=1e-10,
         atol=1e-5,
     ):
-        raise AssertionError("Hourly M4 energy does not reproduce its annual total.")
+        raise AssertionError("Hourly energy does not reproduce its annual total.")
 
     records: list[dict[str, object]] = []
 
@@ -1069,21 +1103,31 @@ def _figure3a_output_table(global_comparison: pd.DataFrame) -> pd.DataFrame:
         raise AssertionError(f"Figure 3a is missing model metrics: {missing}")
 
     result = wide.index.to_frame(index=False)
-    m1_energy = wide[("facility_energy_mwh", "M1")].to_numpy(dtype=float)
-    m4_energy = wide[("facility_energy_mwh", "M4")].to_numpy(dtype=float)
-    m1_carbon = wide[("carbon_tco2", "M1")].to_numpy(dtype=float)
-    m4_carbon = wide[("carbon_tco2", "M4")].to_numpy(dtype=float)
-    result["m1_facility_energy_twh"] = m1_energy / 1e6
-    result["m4_facility_energy_twh"] = m4_energy / 1e6
-    result["m1_vs_m4_facility_energy_difference_pct"] = _relative_difference(
-        m1_energy,
-        m4_energy,
+    annual_energy = wide[
+        ("facility_energy_mwh", "annual_cpu_model")
+    ].to_numpy(dtype=float)
+    hourly_energy = wide[
+        ("facility_energy_mwh", "hourly_workload_resolved_model")
+    ].to_numpy(dtype=float)
+    annual_carbon = wide[("carbon_tco2", "annual_cpu_model")].to_numpy(
+        dtype=float
     )
-    result["m1_carbon_mtco2"] = m1_carbon / 1e6
-    result["m4_carbon_mtco2"] = m4_carbon / 1e6
-    result["m1_vs_m4_carbon_difference_pct"] = _relative_difference(
-        m1_carbon,
-        m4_carbon,
+    hourly_carbon = wide[
+        ("carbon_tco2", "hourly_workload_resolved_model")
+    ].to_numpy(dtype=float)
+    result["annual_cpu_facility_energy_twh"] = annual_energy / 1e6
+    result["hourly_workload_resolved_facility_energy_twh"] = hourly_energy / 1e6
+    result[
+        "annual_vs_hourly_facility_energy_difference_pct"
+    ] = _relative_difference(
+        annual_energy,
+        hourly_energy,
+    )
+    result["annual_cpu_carbon_mtco2"] = annual_carbon / 1e6
+    result["hourly_workload_resolved_carbon_mtco2"] = hourly_carbon / 1e6
+    result["annual_vs_hourly_carbon_difference_pct"] = _relative_difference(
+        annual_carbon,
+        hourly_carbon,
     )
     return result.sort_values("year", ignore_index=True)
 
@@ -1109,11 +1153,11 @@ def _figure3b_output_table(
             "effect",
             "effect_definition",
             "annual_avg_energy_effect_mwh",
-            "energy_effect_pct_of_m4",
+            "energy_effect_pct_of_hourly_reference",
             "annual_avg_carbon_effect_tco2",
-            "carbon_effect_pct_of_m4",
-            "annual_avg_total_m4_minus_m1_energy_mwh",
-            "annual_avg_total_m4_minus_m1_carbon_tco2",
+            "carbon_effect_pct_of_hourly_reference",
+            "annual_avg_total_hourly_minus_annual_energy_mwh",
+            "annual_avg_total_hourly_minus_annual_carbon_tco2",
         ],
     ].copy()
     result["annual_avg_energy_effect_twh"] = (
@@ -1122,11 +1166,11 @@ def _figure3b_output_table(
     result["annual_avg_carbon_effect_mtco2"] = (
         result["annual_avg_carbon_effect_tco2"] / 1e6
     )
-    result["annual_avg_total_m4_minus_m1_energy_twh"] = (
-        result["annual_avg_total_m4_minus_m1_energy_mwh"] / 1e6
+    result["annual_avg_total_hourly_minus_annual_energy_twh"] = (
+        result["annual_avg_total_hourly_minus_annual_energy_mwh"] / 1e6
     )
-    result["annual_avg_total_m4_minus_m1_carbon_mtco2"] = (
-        result["annual_avg_total_m4_minus_m1_carbon_tco2"] / 1e6
+    result["annual_avg_total_hourly_minus_annual_carbon_mtco2"] = (
+        result["annual_avg_total_hourly_minus_annual_carbon_tco2"] / 1e6
     )
     columns = [
         "scenario",
@@ -1139,11 +1183,11 @@ def _figure3b_output_table(
         "effect",
         "effect_definition",
         "annual_avg_energy_effect_twh",
-        "energy_effect_pct_of_m4",
+        "energy_effect_pct_of_hourly_reference",
         "annual_avg_carbon_effect_mtco2",
-        "carbon_effect_pct_of_m4",
-        "annual_avg_total_m4_minus_m1_energy_twh",
-        "annual_avg_total_m4_minus_m1_carbon_mtco2",
+        "carbon_effect_pct_of_hourly_reference",
+        "annual_avg_total_hourly_minus_annual_energy_twh",
+        "annual_avg_total_hourly_minus_annual_carbon_mtco2",
     ]
     return result[columns].sort_values("effect_order", ignore_index=True)
 
@@ -1301,7 +1345,7 @@ def generate_figure3_data(
     )
     if max_energy_check > 1e-6 or max_carbon_check > 1e-6:
         raise AssertionError(
-            "M1-to-M4 effect bridge failed to close: "
+            "Annual-to-hourly effect bridge failed to close: "
             f"energy={max_energy_check:.6g} MWh, "
             f"carbon={max_carbon_check:.6g} tCO2."
         )

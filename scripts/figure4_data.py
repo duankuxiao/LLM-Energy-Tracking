@@ -1,7 +1,7 @@
-"""Generate the M4 sensitivity results required by Figure 4a.
+"""Generate the hourly-model sensitivity results required by Figure 4a.
 
 The script performs one-at-a-time sensitivity experiments for five core
-dimensions that affect the paper's M4 energy and carbon conclusions:
+dimensions that affect the paper's hourly workload-resolved energy and carbon results:
 
 1. GPU idle-power ratio;
 2. training and inference GPU utilization;
@@ -10,7 +10,7 @@ dimensions that affect the paper's M4 energy and carbon conclusions:
 5. hourly carbon-intensity variability.
 
 Only calculation results are produced.  The output workbook contains one
-worksheet, ``Fig4a_M4_Sensitivity``, and no plotting code is included.
+worksheet, ``Fig4a_Sensitivity``, and no plotting code is included.
 """
 
 from __future__ import annotations
@@ -30,8 +30,8 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-import core.m4_hourly_gpu_model as m4_model
-from core.m4_hourly_gpu_model import (
+import core.hourly_workload_resolved_model as hourly_model
+from core.hourly_workload_resolved_model import (
     RESOURCES,
     Alibaba2026TraceConfig,
     HardwarePowerConfig,
@@ -198,11 +198,11 @@ def _preserve_row_means_after_clipping(
 def _hourly_carbon_transformation(
     variability_scale: float = 1.0,
 ) -> Iterator[None]:
-    """Temporarily transform M4 hourly factors, then restore the core loader."""
+    """Temporarily transform hourly factors, then restore the core loader."""
     if variability_scale < 0:
         raise ValueError("Carbon-variability scale must be non-negative.")
 
-    original_loader = m4_model._load_hourly_carbon_factors
+    original_loader = hourly_model._load_hourly_carbon_factors
 
     def transformed_loader(*args, **kwargs):
         timestamps, factors, sources = original_loader(*args, **kwargs)
@@ -216,14 +216,14 @@ def _hourly_carbon_transformation(
         )
         return timestamps, transformed, sources
 
-    m4_model._load_hourly_carbon_factors = transformed_loader
+    hourly_model._load_hourly_carbon_factors = transformed_loader
     try:
         yield
     finally:
-        m4_model._load_hourly_carbon_factors = original_loader
+        hourly_model._load_hourly_carbon_factors = original_loader
 
 
-def _run_m4_case(
+def _run_hourly_model_case(
     *,
     scenario: str,
     policy: str,
@@ -273,14 +273,14 @@ def _run_m4_case(
     ].sum()
     if len(annual_global) != years:
         raise RuntimeError(
-            "Unexpected number of annual M4 sensitivity results: "
+            "Unexpected number of annual hourly-model sensitivity results: "
             f"expected {years}, received {len(annual_global)}."
         )
     facility_energy_mwh = float(annual_global["facility_energy_mwh"].mean())
     carbon_tco2 = float(annual_global["carbon_tco2"].mean())
     return {
-        "m4_facility_energy_mwh": facility_energy_mwh,
-        "m4_carbon_tco2": carbon_tco2,
+        "facility_energy_mwh": facility_energy_mwh,
+        "carbon_tco2": carbon_tco2,
     }
 
 
@@ -321,13 +321,12 @@ def _result_record(
         "experiment_note": experiment_note,
     }
     for metric in (
-        "m4_facility_energy_mwh",
-        "m4_carbon_tco2",
+        "facility_energy_mwh",
+        "carbon_tco2",
     ):
         baseline_value = baseline_result[metric]
         difference = result[metric] - baseline_value
-        metric_prefix = metric.removeprefix("m4_")
-        record[f"{metric_prefix}_change_vs_baseline_pct"] = (
+        record[f"{metric}_change_vs_baseline_pct"] = (
             difference / baseline_value * 100.0
             if baseline_value != 0
             else np.nan
@@ -344,8 +343,8 @@ def _level_label(value: float, baseline: float) -> str:
 def _write_workbook(output_path: Path, frame: pd.DataFrame) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        frame.to_excel(writer, sheet_name="Fig4a_M4_Sensitivity", index=False)
-        worksheet = writer.sheets["Fig4a_M4_Sensitivity"]
+        frame.to_excel(writer, sheet_name="Fig4a_Sensitivity", index=False)
+        worksheet = writer.sheets["Fig4a_Sensitivity"]
         worksheet.freeze_panes = "A2"
         worksheet.auto_filter.ref = worksheet.dimensions
 
@@ -369,7 +368,7 @@ def generate_figure4a_data(
     max_intervals: Optional[int] = None,
     verbose: bool = True,
 ) -> Path:
-    """Run the five core M4 sensitivity groups and write Figure 4a data."""
+    """Run the five hourly-model sensitivity groups and write Figure 4a data."""
     countries = list(countries)
     if years <= 0:
         raise ValueError("years must be a positive integer.")
@@ -411,7 +410,7 @@ def generate_figure4a_data(
 
     if verbose:
         print("[figure4a] Calculating the shared baseline result.", flush=True)
-    baseline_result = _run_m4_case(
+    baseline_result = _run_hourly_model_case(
         **common_run,
         workload_profile=baseline_profile,
         hardware_config=baseline_hardware,
@@ -445,7 +444,7 @@ def generate_figure4a_data(
                         f"[figure4a] {parameter_name}: {value:g} {parameter_unit}.",
                         flush=True,
                     )
-                result = _run_m4_case(
+                result = _run_hourly_model_case(
                     **common_run,
                     workload_profile=profile_builder(float(value)),
                     hardware_config=hardware_builder(float(value)),

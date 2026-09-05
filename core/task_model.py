@@ -1,4 +1,4 @@
-"""Shared task taxonomy and task-ratio validation for M1--M4."""
+"""Shared task taxonomy and task-ratio validation for all model configurations."""
 
 from __future__ import annotations
 
