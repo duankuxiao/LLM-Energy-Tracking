@@ -14,16 +14,19 @@ The four signed effects are calculated in the annual-to-hourly direction and
 must sum to the direct hourly-minus-annual difference. All calculations are fixed to Base-CP
 for 2026--2030 and the default 24-country boundary.  The workbook also reports
 the peak/ramp information that an annual model cannot represent.  The script
-contains no plotting code and does not export intermediate calculation or
-validation tables.
+contains no plotting code. W04 configuration, activity controls and source
+tables accompany the panel data so representation differences are inspectable.
+W06 adds seam-aware ramps, shared-shape diagnostics and fixed-electricity
+load/CI timing stresses, reusing the captured hourly reference.
 """
 
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import sys
 from pathlib import Path
-from typing import Optional, Sequence, Union
+from typing import Mapping, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
@@ -33,6 +36,13 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from core.annual_cpu_model import run_annual_cpu_model
+from core.annual_activity import (
+    ACTIVITY_MODES, ACTIVITY_YEAR_START, ACTIVITY_YEAR_END, AnnualActivityConfig,
+    REFERENCE_TASK_RATIOS, REFERENCE_TASK_UTILIZATION, reference_parameter_table,
+)
+from core.grid_carbon import calendar_hours
+from core.temporal_robustness import power_metrics, shared_shape_diagnostics, timing_stress_tables
+from core.accounting_boundary import build_boundary_metadata, capacity_factor_table, load_ai_capacity_factors
 from core.hourly_workload_resolved_model import (
     RESOURCES,
     WorkloadProfile,
@@ -41,8 +51,11 @@ from core.hourly_workload_resolved_model import (
 )
 from core.task_model import TASK_TYPES
 from dataset.Factors import get_carbon_factor
-from dataset.Installed_capacity_data import DEFAULT_COUNTRIES
+from dataset.Installed_capacity_data import DEFAULT_COUNTRIES, COUNTRY_ISO3
 
+
+from core.research_io import write_workbook
+from scripts.figure_contract import prepare_figure_sources
 
 DEFAULT_OUTPUT = ROOT_DIR / "results" / "figure3_data.xlsx"
 FIGURE_SCENARIO = "Base"
@@ -109,50 +122,9 @@ EFFECT_STEPS = (
     ),
 )
 
-COUNTRY_ISO3 = {
-    "USA": "USA",
-    "China": "CHN",
-    "Japan": "JPN",
-    "France": "FRA",
-    "India": "IND",
-    "Singapore": "SGP",
-    "Canada": "CAN",
-    "Germany": "DEU",
-    "United_Kingdom": "GBR",
-    "Australia": "AUS",
-    "Italy": "ITA",
-    "South_Korea": "KOR",
-    "South_Africa": "ZAF",
-    "Ireland": "IRL",
-    "UAE": "ARE",
-    "Brazil": "BRA",
-    "Israel": "ISR",
-    "Netherlands": "NLD",
-    "Spain": "ESP",
-    "Sweden": "SWE",
-    "Belgium": "BEL",
-    "Norway": "NOR",
-    "Poland": "POL",
-    "Switzerland": "CHE",
-}
-
 DATA_YEAR_START = 2025
-LEGACY_TASK_RATIOS = {
-    "training": 0.20,
-    "inference": 0.75,
-    "other": 0.05,
-    "unclassified": 0.0,
-}
-LEGACY_TASK_UTILIZATION = {
-    "training": 0.80,
-    "inference": 0.50,
-    "other": 0.50,
-    "unclassified": 0.50,
-}
-LEGACY_TRAINING_ACTIVITY_START = 0.90
-LEGACY_TRAINING_ACTIVITY_TARGET = 0.925
-LEGACY_INFERENCE_ACTIVITY_START = 0.50
-LEGACY_INFERENCE_ACTIVITY_TARGET = 0.70
+LEGACY_TASK_RATIOS = REFERENCE_TASK_RATIOS
+LEGACY_TASK_UTILIZATION = REFERENCE_TASK_UTILIZATION
 
 RESULT_COLUMNS = (
     "variant",
@@ -161,6 +133,9 @@ RESULT_COLUMNS = (
     "policy",
     "year",
     "country",
+    "installed_it_mw",
+    "it_energy_mwh",
+    "cpu_utilization",
     "facility_energy_mwh",
     "power_twh",
     "load_weighted_carbon_factor_kg_per_mwh",
@@ -210,6 +185,9 @@ def _standardize_result(
         raise ValueError("A policy column or explicit policy is required.")
     result["variant"] = variant
     result["model"] = model
+    if "cpu_utilization" not in result:
+        result["cpu_utilization"] = (result["avg_cpu_utilization"] if "avg_cpu_utilization" in result
+                                     else result["composite_utilization"])
     result = _recalculate_summary_metrics(result)
     return result[list(RESULT_COLUMNS)]
 
@@ -242,30 +220,6 @@ def _derive_annual_carbon_variant(
     )
 
 
-def _copy_profile_with_load(
-    profile: WorkloadProfile,
-    load: np.ndarray,
-) -> WorkloadProfile:
-    load_array = np.asarray(load, dtype=np.float64)
-    if load_array.shape != profile.load.shape:
-        raise ValueError(
-            "Replacement workload must match the source profile shape: "
-            f"expected {profile.load.shape}, got {load_array.shape}."
-        )
-    if np.any(~np.isfinite(load_array)) or np.any(load_array < 0):
-        raise ValueError("Replacement workload must be finite and non-negative.")
-    return WorkloadProfile(
-        interval_index=profile.interval_index.copy(),
-        interval_hours=float(profile.interval_hours),
-        load=load_array.copy(),
-        trace_capacity=np.asarray(profile.trace_capacity, dtype=float).copy(),
-        task_counts=np.asarray(profile.task_counts).copy(),
-        task_type_summary=profile.task_type_summary.copy(),
-        relative_time=bool(profile.relative_time),
-        trace_capacity_source=tuple(profile.trace_capacity_source),
-    )
-
-
 def _flat_workload_profile(profile: WorkloadProfile) -> WorkloadProfile:
     """Flatten each task-resource series while preserving its total load."""
     mean_load = profile.load.mean(axis=2, keepdims=True)
@@ -277,38 +231,19 @@ def _flat_workload_profile(profile: WorkloadProfile) -> WorkloadProfile:
         atol=1e-9,
     ):
         raise AssertionError("Flat workload does not preserve task-resource totals.")
-    return _copy_profile_with_load(profile, flat_load)
+    return profile.with_load(flat_load)
 
 
-def _legacy_activity(year: int, model_year_end: int) -> np.ndarray:
+def _legacy_activity(year: int, activity_config: Optional[AnnualActivityConfig] = None) -> np.ndarray:
     """Return the annual CPU model's task activity coefficients for one year."""
-    native_year_count = model_year_end - DATA_YEAR_START + 1
-    year_index = year - DATA_YEAR_START
-    if native_year_count <= 0 or not 0 <= year_index < native_year_count:
-        raise ValueError(
-            f"Legacy activity year {year} must be within "
-            f"{DATA_YEAR_START}-{model_year_end}."
-        )
-    training = LEGACY_TRAINING_ACTIVITY_START + (
-        LEGACY_TRAINING_ACTIVITY_TARGET - LEGACY_TRAINING_ACTIVITY_START
-    ) / native_year_count * year_index
-    inference = LEGACY_INFERENCE_ACTIVITY_START + (
-        LEGACY_INFERENCE_ACTIVITY_TARGET - LEGACY_INFERENCE_ACTIVITY_START
-    ) / native_year_count * year_index
-    return np.array(
-        [
-            training if task == "training" else inference
-            for task in TASK_TYPES
-        ],
-        dtype=float,
-    )
+    return (activity_config or AnnualActivityConfig()).vector(year)
 
 
 def _legacy_assumption_profile(
     profile: WorkloadProfile,
     *,
     year: int,
-    model_year_end: int,
+    activity_config: Optional[AnnualActivityConfig] = None,
 ) -> WorkloadProfile:
     """Build a flat profile with the annual CPU model's task/load assumptions.
 
@@ -321,15 +256,13 @@ def _legacy_assumption_profile(
     utilization = np.array(
         [LEGACY_TASK_UTILIZATION[task] for task in TASK_TYPES], dtype=float
     )
-    normalized_task_load = ratios * utilization * _legacy_activity(
-        year, model_year_end
-    )
+    normalized_task_load = ratios * utilization * _legacy_activity(year, activity_config)
     load = (
         normalized_task_load[:, None, None]
         * np.asarray(profile.trace_capacity, dtype=float)[None, :, None]
         * np.ones((1, len(RESOURCES), profile.n_intervals), dtype=float)
     )
-    return _copy_profile_with_load(profile, load)
+    return profile.with_load(load)
 
 
 def _run_hourly_variant(
@@ -351,8 +284,10 @@ def _run_hourly_variant(
     profile: WorkloadProfile,
     verbose: bool,
     return_hourly: bool = False,
-) -> Union[pd.DataFrame, tuple[pd.DataFrame, pd.DataFrame]]:
-    result = run_workload_component_footprint(
+    ai_capacity_factors: Optional[Mapping[int, float]] = None,
+    model_runner=None,
+) -> Union[pd.DataFrame, tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, pd.DataFrame]]]:
+    result = (model_runner or run_workload_component_footprint)(
         renewable_energy_policy=policy,
         scenarios=[scenario],
         years=years,
@@ -370,6 +305,7 @@ def _run_hourly_variant(
         save_hourly_outputs=False,
         max_intervals=max_intervals,
         workload_profile=profile,
+        ai_capacity_factors=ai_capacity_factors,
     )
     annual = _standardize_result(
         result["annual_summary"],
@@ -380,16 +316,13 @@ def _run_hourly_variant(
     if not return_hourly:
         return annual
 
-    hourly = result["hourly_carbon"][[
-        "scenario",
-        "year",
-        "country",
-        "timestamp_utc",
-        "facility_energy_mwh",
-    ]].copy()
+    hourly = result["hourly_carbon"].copy()
     if hourly.empty:
         raise AssertionError("The requested hourly energy table is empty.")
-    return annual, hourly
+    temporal = {"W06_Trace_Alignment": result["temporal_alignment"].copy(),
+                "W06_Baseline_Peak_Ramp": result["temporal_metrics"].copy(),
+                "W06_Baseline_Seams": result["trace_seams"].copy()}
+    return annual, hourly, result["grid_carbon_audit"].copy(), temporal
 
 
 def _validate_variant_coverage(
@@ -439,15 +372,20 @@ def _collect_variant_results(
     max_intervals: Optional[int],
     profile: WorkloadProfile,
     verbose: bool,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+    ai_capacity_factors: Optional[Mapping[int, float]] = None,
+    activity_config: Optional[AnnualActivityConfig] = None,
+    experiment_context=None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, pd.DataFrame]]:
     all_frames: list[pd.DataFrame] = []
     base_cp_hourly: Optional[pd.DataFrame] = None
-    model_year_end = year_start + years - 1
+    base_cp_grid_audit: Optional[pd.DataFrame] = None
+    base_cp_temporal: dict[str, pd.DataFrame] = {}
 
     for policy in POLICIES:
         if verbose:
             print(f"[figure3] Calculating annual CPU baseline for {policy}.", flush=True)
-        annual_cpu_result = run_annual_cpu_model(
+        annual_cpu_result = (experiment_context.run_annual if experiment_context is not None else run_annual_cpu_model)(
+            ai_capacity_factors=ai_capacity_factors,
             renewable_energy_policy=policy,
             scenarios=scenarios,
             years=years,
@@ -455,6 +393,7 @@ def _collect_variant_results(
             year_start=year_start,
             save_outputs=False,
             verbose=False,
+            activity_config=activity_config,
         )
         all_frames.append(
             _standardize_result(
@@ -491,6 +430,8 @@ def _collect_variant_results(
                 max_resource_utilization=max_resource_utilization,
                 max_intervals=max_intervals,
                 profile=flat_profile,
+                model_runner=experiment_context.run_hourly if experiment_context is not None else None,
+                ai_capacity_factors=ai_capacity_factors,
                 verbose=False,
             )
         )
@@ -505,7 +446,7 @@ def _collect_variant_results(
             legacy_profile = _legacy_assumption_profile(
                 profile,
                 year=year,
-                model_year_end=model_year_end,
+                activity_config=activity_config,
             )
             legacy_energy_frames.append(
                 _run_hourly_variant(
@@ -526,6 +467,8 @@ def _collect_variant_results(
                     max_resource_utilization=max_resource_utilization,
                     max_intervals=max_intervals,
                     profile=legacy_profile,
+                    model_runner=experiment_context.run_hourly if experiment_context is not None else None,
+                    ai_capacity_factors=ai_capacity_factors,
                     verbose=False,
                 )
             )
@@ -574,13 +517,15 @@ def _collect_variant_results(
                 max_resource_utilization=max_resource_utilization,
                 max_intervals=max_intervals,
                 profile=profile,
+                model_runner=experiment_context.run_hourly if experiment_context is not None else None,
                 verbose=False,
                 return_hourly=capture_hourly,
+                ai_capacity_factors=ai_capacity_factors,
             )
             if capture_hourly:
                 if not isinstance(hourly_output, tuple):
                     raise AssertionError("Base-CP hourly output was not captured.")
-                hourly_reference, base_cp_hourly = hourly_output
+                hourly_reference, base_cp_hourly, base_cp_grid_audit, base_cp_temporal = hourly_output
             else:
                 if isinstance(hourly_output, tuple):
                     raise AssertionError("Unexpected hourly output for non-Base-CP run.")
@@ -605,13 +550,13 @@ def _collect_variant_results(
     )
     variant_order = pd.CategoricalDtype(VARIANT_ORDER, ordered=True)
     results["variant"] = results["variant"].astype(variant_order)
-    if base_cp_hourly is None:
+    if base_cp_hourly is None or base_cp_grid_audit is None:
         raise AssertionError("Base-CP is required for Figure 3 hourly diagnostics.")
     sorted_results = results.sort_values(
         ["scenario", "policy", "year", "country", "variant"],
         ignore_index=True,
     )
-    return sorted_results, base_cp_hourly
+    return sorted_results, base_cp_hourly, base_cp_grid_audit, base_cp_temporal
 
 
 def _global_model_comparison(variant_results: pd.DataFrame) -> pd.DataFrame:
@@ -655,6 +600,203 @@ def _global_model_comparison(variant_results: pd.DataFrame) -> pd.DataFrame:
     return result.sort_values(
         ["scenario", "policy", "year", "model"], ignore_index=True
     )
+
+
+def _w04_endpoint_pair(annual: pd.DataFrame, component: pd.DataFrame, case: str) -> pd.DataFrame:
+    """Report signed annual-minus-component gaps, with explicit denominators."""
+    annual, component = annual.copy(), component.copy()
+    for endpoint in (annual, component):
+        if "cpu_utilization" not in endpoint:
+            endpoint["cpu_utilization"] = (endpoint["avg_cpu_utilization"] if "avg_cpu_utilization" in endpoint
+                                           else endpoint["composite_utilization"])
+    keys = ["scenario", "policy", "year", "country"]
+    metrics = ["installed_it_mw", "it_energy_mwh", "facility_energy_mwh", "carbon_tco2", "cpu_utilization"]
+    frames = []
+    for scope in ("country", "selected_countries"):
+        left, right = annual[keys + metrics].copy(), component[keys + metrics].copy()
+        if scope == "selected_countries":
+            def aggregate(source):
+                source = source.copy()
+                source["cpu_active_capacity_mw"] = source["cpu_utilization"] * source["installed_it_mw"]
+                summed = source.groupby(keys[:-1], as_index=False, observed=True)[metrics[:-1] + ["cpu_active_capacity_mw"]].sum()
+                summed["cpu_utilization"] = summed.pop("cpu_active_capacity_mw") / summed["installed_it_mw"]
+                return summed
+            left, right = aggregate(left), aggregate(right)
+            left["country"], right["country"] = "SELECTED_COUNTRIES", "SELECTED_COUNTRIES"
+        pair = left.merge(right, on=keys, how="outer", suffixes=("_annual", "_component"),
+                          validate="one_to_one", indicator=True)
+        if not pair["_merge"].eq("both").all():
+            raise ValueError(f"W04 endpoint coverage differs for {case}.")
+        pair = pair.drop(columns="_merge")
+        if not np.allclose(pair["installed_it_mw_annual"], pair["installed_it_mw_component"], rtol=1e-10, atol=1e-6):
+            raise ValueError(f"W04 endpoint capacity boundaries differ for {case}.")
+        pair["cpu_utilization_difference"] = pair["cpu_utilization_annual"] - pair["cpu_utilization_component"]
+        if case.startswith("common_mean") and not np.allclose(
+            pair["cpu_utilization_annual"], pair["cpu_utilization_component"], rtol=1e-10, atol=1e-10):
+            raise ValueError(f"Common CPU activity is not matched between endpoints for {case}.")
+        for metric, unit in (("facility_energy_mwh", "mwh"), ("carbon_tco2", "tco2")):
+            left_values = pair[f"{metric}_annual"].to_numpy(dtype=float)
+            right_values = pair[f"{metric}_component"].to_numpy(dtype=float)
+            name = "energy" if unit == "mwh" else "carbon"
+            pair[f"annual_minus_component_{name}_{unit}"] = left_values - right_values
+            pair[f"{name}_gap_pct_of_component"] = _relative_difference(left_values, right_values)
+            pair[f"{name}_gap_pct_of_annual"] = np.divide(
+                (left_values - right_values) * 100., left_values,
+                out=np.full(len(pair), np.nan), where=left_values != 0)
+        for endpoint in ("annual", "component"):
+            capacity = pair[f"installed_it_mw_{endpoint}"].to_numpy(dtype=float)
+            for metric in ("it_energy_mwh", "facility_energy_mwh", "carbon_tco2"):
+                pair[f"{endpoint}_{metric}_per_installed_it_mw"] = np.divide(
+                    pair[f"{metric}_{endpoint}"].to_numpy(dtype=float), capacity,
+                    out=np.full(len(pair), np.nan), where=capacity > 0)
+            pair[f"{endpoint}_mean_it_power_per_installed_it_mw"] = pair[f"{endpoint}_it_energy_mwh_per_installed_it_mw"] / 8760.
+        pair["case"], pair["scope"] = case, scope
+        pair["estimand"] = "conditional_representation_difference_not_observed_prediction_error"
+        frames.append(pair)
+    return pd.concat(frames, ignore_index=True)
+
+
+def _annual_activity_controls(
+    *, variant_results: pd.DataFrame, profile: WorkloadProfile,
+    countries: Sequence[str], year_start: int, years: int,
+    activity_config: AnnualActivityConfig,
+    workload_profile_path: Union[str, Path], server_profile_path: Optional[Union[str, Path]],
+    capacity_quantile: float, max_resource_utilization: float, max_intervals: Optional[int],
+    ai_capacity_factors: Optional[Mapping[int, float]],
+    experiment_context=None,
+) -> dict[str, pd.DataFrame]:
+    """Separate activity ramps from power representation without recalibration.
+
+    Common-mean controls use realized, capped task-resource means. The annual
+    aggregate equation represents the common CPU channel; the component model
+    additionally represents GPU/memory/storage channels, which are disclosed.
+    Both common-mean endpoints use ANNUAL direct CI and flat workloads.
+    """
+    requested_years = list(range(year_start, year_start + years))
+    reference = variant_results.loc[variant_results["variant"] == HOURLY_REFERENCE_VARIANT].copy()
+    pairs, configuration, loads, factor_frames = [], [], [], []
+    for mode in ACTIVITY_MODES:
+        config = replace(activity_config, mode=mode)
+        factor_frames.append(config.table(range(ACTIVITY_YEAR_START, ACTIVITY_YEAR_END + 1)))
+        if mode == activity_config.mode:
+            annual = variant_results.loc[variant_results["variant"] == ANNUAL_BASELINE_VARIANT].copy()
+        else:
+            annual = (experiment_context.run_annual if experiment_context is not None else run_annual_cpu_model)(
+                renewable_energy_policy=FIGURE_POLICY, scenarios=[FIGURE_SCENARIO],
+                years=years, year_start=year_start, countries=countries,
+                activity_config=config, ai_capacity_factors=ai_capacity_factors,
+                save_outputs=False, verbose=False)["annual_summary"]
+        case = f"{mode}_baseline"
+        pairs.append(_w04_endpoint_pair(annual, reference, case))
+        configuration.append({
+            "case": case, "annual_activity": mode, "annual_load": "reference_task_shares_and_utilizations",
+            "component_activity": "unchanged_trace", "component_load": "full_hourly_trace",
+            "annual_carbon": "annual_direct", "component_carbon": "hourly_direct_or_explicit_fallback",
+            "difference_dimensions": "power_configuration; workload_assumptions; temporal_shape; CI_matching",
+            "capacity_calibration": "same_factor_set_in_both_endpoints_no_recalibration",
+        })
+
+    normalized = profile.load / profile.trace_capacity[None, :, None]
+    totals = normalized.sum(axis=0)
+    cap_scale = np.minimum(1., np.divide(max_resource_utilization, totals,
+                                        out=np.ones_like(totals), where=totals > 0))
+    common_mean = (normalized * cap_scale[None, :, :]).mean(axis=2)
+    cpu_id = RESOURCES.index("cpu")
+    unity = AnnualActivityConfig(mode="fixed", training_start=1., training_target=1.,
+                                 inference_start=1., inference_target=1.)
+    calendar = replace(activity_config, mode="calendar")
+    anchor = calendar.vector(ACTIVITY_YEAR_START)
+    if np.any(anchor <= 0):
+        raise ValueError("Symmetric relative activity controls require positive 2025 activity anchors.")
+    for case in ("common_mean_fixed_activity", "common_mean_symmetric_trend"):
+        annual_frames, component_frames = [], []
+        for year in requested_years:
+            multiplier = (np.ones(len(TASK_TYPES)) if case == "common_mean_fixed_activity" else
+                          calendar.vector(year) / anchor)
+            requested = common_mean * multiplier[:, None]
+            resource_totals = requested.sum(axis=0)
+            clipping = np.minimum(1., np.divide(max_resource_utilization, resource_totals,
+                                               out=np.ones_like(resource_totals), where=resource_totals > 0))
+            realized = requested * clipping[None, :]
+            cpu_total = float(realized[:, cpu_id].sum())
+            cpu_utilization = float(np.clip(cpu_total, 0., max_resource_utilization))
+            cpu_shares = (realized[:, cpu_id] / cpu_total if cpu_total > 0 else
+                          np.array([REFERENCE_TASK_RATIOS[task] for task in TASK_TYPES]))
+            task_ratios = dict(zip(TASK_TYPES, cpu_shares))
+            annual_frames.append((experiment_context.run_annual if experiment_context is not None else run_annual_cpu_model)(
+                renewable_energy_policy=FIGURE_POLICY, scenarios=[FIGURE_SCENARIO],
+                years=1, year_start=year, countries=countries, activity_config=unity,
+                task_ratio_by_country={country: task_ratios for country in countries},
+                u_train=cpu_utilization, u_infer=cpu_utilization, u_other=cpu_utilization,
+                ai_capacity_factors=ai_capacity_factors, save_outputs=False, verbose=False)["annual_summary"])
+            flat_load = np.broadcast_to(
+                realized[:, :, None] * profile.trace_capacity[None, :, None], profile.load.shape).copy()
+            flat_profile = profile.with_load(flat_load)
+            component_frames.append(_run_hourly_variant(
+                variant=case, policy=FIGURE_POLICY, scenario=FIGURE_SCENARIO, countries=countries,
+                year_start=year, years=1, workload_profile_path=workload_profile_path,
+                server_profile_path=server_profile_path, hourly_carbon_factors_dir=None,
+                hourly_carbon_scope="direct", hourly_carbon_fallback_to_annual=False,
+                capacity_quantile=capacity_quantile, max_resource_utilization=max_resource_utilization,
+                max_intervals=max_intervals, profile=flat_profile, verbose=False,
+                ai_capacity_factors=ai_capacity_factors,
+                model_runner=experiment_context.run_hourly if experiment_context is not None else None))
+            for task_id, task in enumerate(TASK_TYPES):
+                for resource_id, resource in enumerate(RESOURCES):
+                    loads.append({
+                        "case": case, "year": year, "task_type": task, "resource": resource,
+                        "base_realized_normalized_mean": common_mean[task_id, resource_id],
+                        "imposed_task_multiplier": multiplier[task_id],
+                        "requested_normalized_mean": requested[task_id, resource_id],
+                        "resource_cap_scale": clipping[resource_id],
+                        "realized_normalized_mean": realized[task_id, resource_id],
+                        "represented_in_annual_aggregate": resource == "cpu",
+                        "represented_in_component_model": True,
+                    })
+        pairs.append(_w04_endpoint_pair(pd.concat(annual_frames, ignore_index=True),
+                                        pd.concat(component_frames, ignore_index=True), case))
+        configuration.append({
+            "case": case, "annual_activity": "common_realized_mean_CPU_contributions",
+            "annual_load": "flat_common_CPU_mean", "component_activity": case,
+            "component_load": "flat_common_task_resource_means",
+            "annual_carbon": "annual_direct", "component_carbon": "annual_direct",
+            "difference_dimensions": "aggregate_CPU_power_vs_component_power; additional_non_CPU_channels",
+            "capacity_calibration": "same_factor_set_in_both_endpoints_no_recalibration",
+        })
+    comparison = pd.concat(pairs, ignore_index=True).sort_values(
+        ["case", "scope", "scenario", "policy", "country", "year"], ignore_index=True)
+    group = comparison.groupby(["case", "scope", "scenario", "policy", "country"], sort=False)
+    for metric in ("annual_minus_component_energy_mwh", "annual_minus_component_carbon_tco2"):
+        comparison[f"{metric}_change_since_first_year"] = comparison[metric] - group[metric].transform("first")
+    comparison["gap_evolution_start_year"] = year_start
+    comparison["installed_capacity_ratio_since_first_year"] = (
+        comparison["installed_it_mw_annual"] / group["installed_it_mw_annual"].transform("first"))
+    for endpoint in ("annual", "component"):
+        metric = f"{endpoint}_mean_it_power_per_installed_it_mw"
+        comparison[f"{metric}_change_since_first_year"] = comparison[metric] - group[metric].transform("first")
+    baseline = comparison.loc[comparison["case"].isin([f"{mode}_baseline" for mode in ACTIVITY_MODES])].copy()
+    keys = ["scope", "scenario", "policy", "year", "country"]
+    fixed = baseline.loc[baseline["case"] == "fixed_baseline", keys + ["facility_energy_mwh_annual", "carbon_tco2_annual"]].rename(
+        columns={"facility_energy_mwh_annual": "fixed_annual_energy_mwh", "carbon_tco2_annual": "fixed_annual_carbon_tco2"})
+    baseline = baseline.merge(fixed, on=keys, validate="many_to_one")
+    baseline["annual_energy_change_vs_fixed_mwh"] = baseline["facility_energy_mwh_annual"] - baseline["fixed_annual_energy_mwh"]
+    baseline["annual_energy_change_pct_of_fixed_annual"] = _relative_difference(
+        baseline["facility_energy_mwh_annual"], baseline["fixed_annual_energy_mwh"])
+    baseline["annual_carbon_change_vs_fixed_tco2"] = baseline["carbon_tco2_annual"] - baseline["fixed_annual_carbon_tco2"]
+    baseline["annual_carbon_change_pct_of_fixed_annual"] = _relative_difference(
+        baseline["carbon_tco2_annual"], baseline["fixed_annual_carbon_tco2"])
+    legacy = baseline.loc[baseline["case"] == "legacy_six_year_baseline", keys + ["facility_energy_mwh_annual", "carbon_tco2_annual"]].rename(
+        columns={"facility_energy_mwh_annual": "legacy_annual_energy_mwh", "carbon_tco2_annual": "legacy_annual_carbon_tco2"})
+    baseline = baseline.merge(legacy, on=keys, validate="many_to_one")
+    baseline["annual_energy_change_vs_legacy_mwh"] = baseline["facility_energy_mwh_annual"] - baseline["legacy_annual_energy_mwh"]
+    baseline["annual_energy_change_pct_of_legacy_annual"] = _relative_difference(
+        baseline["facility_energy_mwh_annual"], baseline["legacy_annual_energy_mwh"])
+    baseline["annual_carbon_change_vs_legacy_tco2"] = baseline["carbon_tco2_annual"] - baseline["legacy_annual_carbon_tco2"]
+    baseline["annual_carbon_change_pct_of_legacy_annual"] = _relative_difference(
+        baseline["carbon_tco2_annual"], baseline["legacy_annual_carbon_tco2"])
+    return {"W04_Control_Comparison": comparison, "W04_Configuration_Matrix": pd.DataFrame(configuration),
+            "W04_Activity_Factors": pd.concat(factor_frames, ignore_index=True),
+            "W04_Common_Mean_Load": pd.DataFrame(loads), "W04_Baseline_Impact": baseline}
 
 
 def _country_effect_decomposition(variant_results: pd.DataFrame) -> pd.DataFrame:
@@ -870,37 +1012,10 @@ def _annual_average_global_effects(effect_results: pd.DataFrame) -> pd.DataFrame
     )
 
 
-def _power_metrics(hourly_power_mw: np.ndarray) -> dict[str, float]:
-    values = np.asarray(hourly_power_mw, dtype=float)
-    if values.ndim != 1 or len(values) == 0:
-        raise ValueError("Hourly power must be a non-empty one-dimensional array.")
-    if np.any(~np.isfinite(values)) or np.any(values < 0):
-        raise ValueError("Hourly power must be finite and non-negative.")
-
-    mean_power = float(values.mean())
-    differences = np.diff(values)
-    max_ramp_up = max(float(differences.max()), 0.0) if len(differences) else 0.0
-    max_ramp_down = min(float(differences.min()), 0.0) if len(differences) else 0.0
-    max_abs_ramp = float(np.abs(differences).max()) if len(differences) else 0.0
-    return {
-        "mean_power_mw": mean_power,
-        "peak_power_mw": float(values.max()),
-        "p99_power_mw": float(np.quantile(values, 0.99)),
-        "peak_to_mean_ratio": (
-            float(values.max() / mean_power) if mean_power > 0 else np.nan
-        ),
-        "max_ramp_up_mw_per_h": max_ramp_up,
-        "max_ramp_down_mw_per_h": max_ramp_down,
-        "max_abs_ramp_mw_per_h": max_abs_ramp,
-        "max_abs_ramp_pct_of_mean": (
-            max_abs_ramp * 100.0 / mean_power if mean_power > 0 else np.nan
-        ),
-    }
-
-
 def _peak_ramp_table(
     variant_results: pd.DataFrame,
     base_cp_hourly: pd.DataFrame,
+    allow_legacy_calendar: bool = True,
 ) -> pd.DataFrame:
     """Return plotting data for the flat and hourly workload profiles."""
     is_base_cp = (variant_results["scenario"] == FIGURE_SCENARIO) & (
@@ -922,17 +1037,19 @@ def _peak_ramp_table(
         hourly_rows=("timestamp_utc", "size"),
         unique_hours=("timestamp_utc", "nunique"),
     )
-    invalid_coverage = hourly_coverage.loc[
-        (hourly_coverage["hourly_rows"] != 8760)
-        | (hourly_coverage["unique_hours"] != 8760)
-    ]
+    expected_hours = hourly_coverage["year"].map(lambda year: len(calendar_hours(int(year))))
+    full = (hourly_coverage["hourly_rows"] == expected_hours) & (hourly_coverage["unique_hours"] == expected_hours)
+    legacy = (allow_legacy_calendar & (expected_hours == 8784)
+              & hourly_coverage["hourly_rows"].eq(8760) & hourly_coverage["unique_hours"].eq(8760))
+    invalid_coverage = hourly_coverage.loc[~(full | legacy)]
     if not invalid_coverage.empty:
         sample = invalid_coverage.head().to_dict("records")
         raise AssertionError(
-            "Figure 3 operating profiles must contain exactly 8,760 unique "
+            "Figure 3 operating profiles must contain a complete UTC calendar "
             f"hours per country-year; invalid rows: {sample}."
         )
 
+    shape_by_year = {}
     for year, year_group in hourly.groupby("year", sort=True):
         country_profiles = year_group.pivot(
             index="timestamp_utc",
@@ -949,20 +1066,7 @@ def _peak_ramp_table(
             raise AssertionError(
                 f"Figure 3 hourly country profiles have non-positive means for {year}."
             )
-        normalized_profiles = profile_values / profile_means
-        if not np.allclose(
-            normalized_profiles,
-            normalized_profiles[:, [0]],
-            rtol=1e-9,
-            atol=1e-9,
-        ):
-            max_deviation = float(
-                np.abs(normalized_profiles - normalized_profiles[:, [0]]).max()
-            )
-            raise AssertionError(
-                "Figure 3 country profiles do not share one relative hourly "
-                f"shape for {year}; maximum normalized deviation={max_deviation:.3e}."
-            )
+        shape_by_year[int(year)] = shared_shape_diagnostics(profile_values.T)
 
     hourly_annual = hourly.groupby(
         ["year", "country"], as_index=False, sort=True
@@ -996,6 +1100,9 @@ def _peak_ramp_table(
         year: int,
         trace_values: np.ndarray,
         flat_annual_energy_mwh: float,
+        seam_before: np.ndarray,
+        discontinuity_before: np.ndarray,
+        sum_of_country_peaks_mw: float = np.nan,
     ) -> None:
         n_hours = len(trace_values)
         profiles = (
@@ -1006,6 +1113,9 @@ def _peak_ramp_table(
             ("hourly_trace_workload", trace_values),
         )
         for profile_name, values in profiles:
+            is_trace = profile_name == "hourly_trace_workload"
+            seams = seam_before if is_trace else np.zeros(n_hours, dtype=bool)
+            artifacts = discontinuity_before if is_trace else np.zeros(n_hours, dtype=bool)
             records.append(
                 {
                     "scenario": FIGURE_SCENARIO,
@@ -1015,7 +1125,16 @@ def _peak_ramp_table(
                     "year": int(year),
                     "profile": profile_name,
                     "hours": n_hours,
-                    **_power_metrics(values),
+                    "calendar_status": ("full_calendar" if n_hours == len(calendar_hours(int(year)))
+                                        else "legacy_8760_truncated_leap_year"),
+                    **(shape_by_year[year] if is_trace else {
+                        **shape_by_year[year], "all_positive_country_shapes_identical": True,
+                        "maximum_normalized_shape_deviation": 0.}),
+                    "power_unit": "MW", "ramp_unit": "MW h^-1",
+                    "ramp_definition": "Maximum absolute hourly ramp",
+                    "peak_construction": "sum_country_power_at_same_UTC_hour_then_max" if scope == "aggregate" else "own_country_hourly_maximum",
+                    "sum_of_individual_country_peaks_mw": sum_of_country_peaks_mw if is_trace else (flat_annual_energy_mwh / n_hours if scope == "aggregate" else np.nan),
+                    **power_metrics(values, seams, artifacts),
                 }
             )
 
@@ -1035,6 +1154,9 @@ def _peak_ramp_table(
             year=int(year),
             trace_values=global_trace,
             flat_annual_energy_mwh=global_flat_energy,
+            seam_before=trace_group.groupby("timestamp_utc", sort=True)["trace_repeat_seam_before"].any().to_numpy(),
+            discontinuity_before=trace_group.groupby("timestamp_utc", sort=True)["alignment_discontinuity_before"].any().to_numpy(),
+            sum_of_country_peaks_mw=float(trace_group.groupby("country")["facility_energy_mwh"].max().sum()),
         )
 
     detail_year = DETAIL_YEAR
@@ -1060,6 +1182,8 @@ def _peak_ramp_table(
             year=detail_year,
             trace_values=trace_values,
             flat_annual_energy_mwh=country_flat_energy,
+            seam_before=trace_group.sort_values("timestamp_utc")["trace_repeat_seam_before"].to_numpy(dtype=bool),
+            discontinuity_before=trace_group.sort_values("timestamp_utc")["alignment_discontinuity_before"].to_numpy(dtype=bool),
         )
 
     result = pd.DataFrame.from_records(records)
@@ -1192,6 +1316,22 @@ def _figure3b_output_table(
     return result[columns].sort_values("effect_order", ignore_index=True)
 
 
+def _plot_ramp_columns(result: pd.DataFrame) -> list[str]:
+    metrics = ("max_abs_ramp_excluding_seams", "max_abs_ramp_excluding_alignment",
+               "p95_abs_ramp", "p99_abs_ramp", "p95_abs_ramp_excluding_seams",
+               "p99_abs_ramp_excluding_seams")
+    for metric in metrics:
+        result[f"{metric}_gw_per_h"] = result[f"{metric}_mw_per_h"] / 1000.
+    result["power_unit"] = "GW"
+    result["ramp_unit"] = "GW h^-1"
+    result["ramp_definition"] = "Maximum absolute hourly ramp"
+    return [f"{metric}_gw_per_h" for metric in metrics] + [
+        "calendar_status", "repeat_seam_count", "alignment_discontinuity_count",
+        "raw_max_occurs_at_repeat_seam", "raw_max_occurs_at_alignment_discontinuity",
+        "power_unit", "ramp_unit", "ramp_definition", "peak_construction",
+        "all_positive_country_shapes_identical", "maximum_normalized_shape_deviation"]
+
+
 def _figure3c_output_table(peak_ramp: pd.DataFrame) -> pd.DataFrame:
     result = peak_ramp.loc[peak_ramp["scope"] == "aggregate"].copy()
     result["mean_power_gw"] = result["mean_power_mw"] / 1000.0
@@ -1200,6 +1340,8 @@ def _figure3c_output_table(peak_ramp: pd.DataFrame) -> pd.DataFrame:
     result["max_abs_ramp_gw_per_h"] = (
         result["max_abs_ramp_mw_per_h"] / 1000.0
     )
+    extra_columns = _plot_ramp_columns(result)
+    result["sum_of_individual_country_peaks_gw"] = result["sum_of_individual_country_peaks_mw"] / 1000.
     columns = [
         "scenario",
         "policy",
@@ -1210,7 +1352,8 @@ def _figure3c_output_table(peak_ramp: pd.DataFrame) -> pd.DataFrame:
         "peak_power_gw",
         "p99_power_gw",
         "max_abs_ramp_gw_per_h",
-    ]
+        "sum_of_individual_country_peaks_gw",
+    ] + extra_columns
     profile_order = result["profile"].map(
         {"flat_trace_mean_workload": 0, "hourly_trace_workload": 1}
     )
@@ -1232,6 +1375,7 @@ def _figure3d_output_table(peak_ramp: pd.DataFrame) -> pd.DataFrame:
     result["max_abs_ramp_gw_per_h"] = (
         result["max_abs_ramp_mw_per_h"] / 1000.0
     )
+    extra_columns = _plot_ramp_columns(result)
     result = result.sort_values(
         ["peak_power_gw", "country"],
         ascending=[False, True],
@@ -1248,26 +1392,8 @@ def _figure3d_output_table(peak_ramp: pd.DataFrame) -> pd.DataFrame:
         "hours",
         "peak_power_gw",
         "max_abs_ramp_gw_per_h",
-    ]
+    ] + extra_columns
     return result[columns]
-
-
-def _write_workbook(output_path: Path, sheets: dict[str, pd.DataFrame]) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        for sheet_name, frame in sheets.items():
-            frame.to_excel(writer, sheet_name=sheet_name, index=False)
-            worksheet = writer.sheets[sheet_name]
-            worksheet.freeze_panes = "A2"
-            worksheet.auto_filter.ref = worksheet.dimensions
-            for column_cells in worksheet.columns:
-                max_length = max(
-                    len(str(cell.value)) if cell.value is not None else 0
-                    for cell in column_cells
-                )
-                worksheet.column_dimensions[column_cells[0].column_letter].width = min(
-                    max(max_length + 2, 10), 48
-                )
 
 
 def generate_figure3_data(
@@ -1286,9 +1412,16 @@ def generate_figure3_data(
     max_resource_utilization: float = 1.0,
     max_intervals: Optional[int] = None,
     verbose: bool = True,
+    ai_capacity_factors: Optional[Mapping[int, float]] = None,
+    activity_config: Optional[AnnualActivityConfig] = None,
+    experiment_context=None,
 ) -> Path:
     """Calculate fixed Base-CP Figure 3 panels a-d and write one workbook."""
     countries = list(countries)
+    activity_config = activity_config or AnnualActivityConfig()
+    activity_config.validate()
+    if hourly_carbon_scope != "direct":
+        raise ValueError("Figure 3 requires direct factors in both endpoints; no comparable annual life-cycle table is supplied.")
     year_end = year_start + years - 1
     if year_start != FIGURE_YEAR_START or year_end != FIGURE_YEAR_END:
         raise ValueError(
@@ -1307,8 +1440,8 @@ def generate_figure3_data(
         raise ValueError(f"Missing ISO3 labels for countries: {unmapped_countries}")
 
     if verbose:
-        print("[figure3] Building the shared GPU workload profile.", flush=True)
-    profile = build_workload_profile(
+        print("[figure3] Reusing the prepared workload profile." if experiment_context is not None else "[figure3] Building the workload profile.", flush=True)
+    profile = experiment_context.profile if experiment_context is not None else build_workload_profile(
         workload_profile_path=workload_profile_path,
         server_profile_path=server_profile_path,
         capacity_quantile=capacity_quantile,
@@ -1316,7 +1449,9 @@ def generate_figure3_data(
         verbose=verbose,
     )
 
-    variant_results, base_cp_hourly = _collect_variant_results(
+    variant_results, base_cp_hourly, grid_audit, temporal_baseline = _collect_variant_results(
+        experiment_context=experiment_context,
+        ai_capacity_factors=ai_capacity_factors,
         scenarios=[FIGURE_SCENARIO],
         countries=countries,
         year_start=year_start,
@@ -1331,11 +1466,25 @@ def generate_figure3_data(
         max_intervals=max_intervals,
         profile=profile,
         verbose=verbose,
+        activity_config=activity_config,
     )
     global_comparison = _global_model_comparison(variant_results)
     country_effects = _country_effect_decomposition(variant_results)
     annual_average_effects = _annual_average_global_effects(country_effects)
-    peak_ramp = _peak_ramp_table(variant_results, base_cp_hourly)
+    peak_ramp = _peak_ramp_table(variant_results, base_cp_hourly,
+                                allow_legacy_calendar=hourly_carbon_fallback_to_annual)
+    if verbose:
+        print("[figure3] Reusing hourly output for W06 fixed-electricity timing controls.", flush=True)
+    timing_controls = timing_stress_tables(base_cp_hourly, policy=FIGURE_POLICY, carbon_scope=hourly_carbon_scope)
+    if verbose:
+        print("[figure3] Calculating W04 fixed-activity, historical and common-load controls.", flush=True)
+    controls = _annual_activity_controls(
+        experiment_context=experiment_context,
+        variant_results=variant_results, profile=profile, countries=countries,
+        year_start=year_start, years=years, activity_config=activity_config,
+        workload_profile_path=workload_profile_path, server_profile_path=server_profile_path,
+        capacity_quantile=capacity_quantile, max_resource_utilization=max_resource_utilization,
+        max_intervals=max_intervals, ai_capacity_factors=ai_capacity_factors)
 
     max_energy_check = float(
         annual_average_effects["energy_decomposition_check_mwh"].abs().max()
@@ -1351,6 +1500,28 @@ def generate_figure3_data(
         )
 
     sheets = {
+        "W04_Run_Metadata": pd.DataFrame([{
+            "annual_activity_mode": activity_config.mode,
+            "activity_anchor_start_year": ACTIVITY_YEAR_START, "activity_anchor_end_year": ACTIVITY_YEAR_END,
+            "trace_intervals": profile.n_intervals, "trace_hours": profile.trace_hours,
+            "max_intervals": max_intervals, "trace_truncated_by_max_intervals": max_intervals is not None,
+            "grid_input_directory": str(Path(hourly_carbon_factors_dir).resolve()),
+            "strict_hourly_carbon": not hourly_carbon_fallback_to_annual,
+            "capacity_quantile": capacity_quantile, "max_resource_utilization": max_resource_utilization,
+            "calibration_rule": "same_capacity_factors_for_all_cases_no_recalibration",
+            "estimand": "conditional_representation_difference_not_observed_accuracy",
+            "bridge_interpretation": "ordered_configuration_changes_not_unique_causal_attribution",
+            "energy_convention": "8760_hour_annualized_trace_energy_distributed_over_CI_calendar",
+        }]),
+        "W04_Parameter_Assumptions": reference_parameter_table(activity_config),
+        "W04_Grid_Input_Audit": grid_audit,
+        **temporal_baseline,
+        **timing_controls,
+        **controls,
+        "Source_Bridge_Variants": variant_results,
+        "Source_Country_Bridge": country_effects,
+        "Accounting_Boundary": build_boundary_metadata(countries, ai_capacity_factors),
+        "AI_Capacity_Factors": capacity_factor_table(year_start, years, ai_capacity_factors),
         "Fig3a_Model_Comparison": _figure3a_output_table(global_comparison),
         "Fig3b_Effect_Decomposition": _figure3b_output_table(
             annual_average_effects
@@ -1359,7 +1530,10 @@ def generate_figure3_data(
         "Fig3d_Country_Peak_Ramp": _figure3d_output_table(peak_ramp),
     }
     resolved_output = Path(output_path)
-    _write_workbook(resolved_output, sheets)
+    if experiment_context is not None:
+        sheets["Shared_Experiment_Configuration"] = experiment_context.metadata_table()
+    sheets = prepare_figure_sources(3, sheets, carbon_scope=hourly_carbon_scope)
+    write_workbook(resolved_output, sheets)
     if verbose:
         print(
             f"[figure3] Effect bridge closed with maximum checks "
@@ -1387,6 +1561,9 @@ def _parse_args() -> argparse.Namespace:
         "--hourly-carbon-scope", choices=("direct", "life_cycle"), default="direct"
     )
     parser.add_argument("--strict-hourly-carbon", action="store_true")
+    parser.add_argument("--ai-capacity-factors-file", type=Path, default=None)
+    parser.add_argument("--annual-activity-mode", choices=ACTIVITY_MODES, default="calendar",
+                        help="Fixed 2025-2030 calendar, fixed 2025 activity, or historical six-year denominator.")
     parser.add_argument("--capacity-quantile", type=float, default=0.96)
     parser.add_argument("--max-resource-utilization", type=float, default=1.0)
     parser.add_argument(
@@ -1402,6 +1579,9 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     generate_figure3_data(
+        activity_config=AnnualActivityConfig(mode=args.annual_activity_mode),
+        ai_capacity_factors=(load_ai_capacity_factors(args.ai_capacity_factors_file)
+                             if args.ai_capacity_factors_file else None),
         output_path=args.output,
         workload_profile_path=args.workload_profile_path,
         server_profile_path=args.server_profile_path,

@@ -13,7 +13,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Optional, Sequence, Union
+from typing import Mapping, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
@@ -27,47 +27,15 @@ from core.hourly_workload_resolved_model import (
     build_workload_profile,
     run_workload_component_footprint,
 )
-from dataset.Factors import get_carbon_factor
-from dataset.Installed_capacity_data import DEFAULT_COUNTRIES
+from core.accounting_boundary import build_boundary_metadata, capacity_factor_table, load_ai_capacity_factors, resolve_countries
+from dataset.Factors import GRID_SCENARIO_KIND, annual_policy_audit, get_carbon_factor
+from dataset.Installed_capacity_data import DEFAULT_COUNTRIES, COUNTRY_ISO3
+from core.research_io import write_workbook
+from scripts.figure_contract import prepare_figure_sources
 
 
 DEFAULT_OUTPUT = ROOT_DIR / "results" / "figure2_data.xlsx"
 POLICIES = ("CP", "NDC", "NZ")
-COUNTRY_ISO3 = {
-    "USA": "USA",
-    "China": "CHN",
-    "Japan": "JPN",
-    "France": "FRA",
-    "India": "IND",
-    "Singapore": "SGP",
-    "Canada": "CAN",
-    "Germany": "DEU",
-    "United_Kingdom": "GBR",
-    "Australia": "AUS",
-    "Italy": "ITA",
-    "South_Korea": "KOR",
-    "South_Africa": "ZAF",
-    "Ireland": "IRL",
-    "UAE": "ARE",
-    "Brazil": "BRA",
-    "Israel": "ISR",
-    "Netherlands": "NLD",
-    "Spain": "ESP",
-    "Sweden": "SWE",
-    "Belgium": "BEL",
-    "Norway": "NOR",
-    "Poland": "POL",
-    "Switzerland": "CHE",
-}
-
-
-def _annual_carbon_factor(
-    policy: str,
-    country: str,
-    year: int,
-) -> float:
-    return get_carbon_factor(policy, country, year)
-
 
 def _carbon_factor_map_table(
     countries: Sequence[str],
@@ -81,13 +49,14 @@ def _carbon_factor_map_table(
             {
                 "country": COUNTRY_ISO3[country],
                 "policy": "CP",
+                "scope": "direct",
                 "year_start": averaged_years[0],
                 "year_end": averaged_years[-1],
                 "years_averaged": len(averaged_years),
                 "annual_avg_carbon_factor_kg_per_mwh": float(
                     np.mean(
                         [
-                            _annual_carbon_factor("CP", country, year)
+                            get_carbon_factor("CP", country, year)
                             for year in averaged_years
                         ]
                     )
@@ -303,8 +272,11 @@ def _run_policy(
     max_intervals: Optional[int],
     profile: WorkloadProfile,
     verbose: bool,
-) -> pd.DataFrame:
-    result = run_workload_component_footprint(
+    ai_capacity_factors: Optional[Mapping[int, float]] = None,
+    model_runner=None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    # Retain grid diagnostics even when the large hourly output is not saved.
+    result = (model_runner or run_workload_component_footprint)(
         renewable_energy_policy=policy,
         scenarios=[scenario],
         years=years,
@@ -322,6 +294,7 @@ def _run_policy(
         save_hourly_outputs=False,
         max_intervals=max_intervals,
         workload_profile=profile,
+        ai_capacity_factors=ai_capacity_factors,
     )
     annual = result["annual_summary"].copy()
     annual.insert(1, "policy", policy)
@@ -331,17 +304,37 @@ def _run_policy(
         out=np.full(len(annual), np.nan),
         where=annual["facility_energy_mwh"].to_numpy(dtype=float) != 0,
     )
-    return annual
+    return annual, result["grid_carbon_audit"].copy()
 
 
-def _write_workbook(output_path: Path, sheets: dict[str, pd.DataFrame]) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        for sheet_name, frame in sheets.items():
-            frame.to_excel(writer, sheet_name=sheet_name, index=False)
-            worksheet = writer.sheets[sheet_name]
-            worksheet.freeze_panes = "A2"
-            worksheet.auto_filter.ref = worksheet.dimensions
+def _policy_effect_audit(annual: pd.DataFrame, grid: pd.DataFrame) -> pd.DataFrame:
+    """Compare imposed scalar constraints with actual emissions, for every year."""
+    keys = ["scenario", "year", "country"]
+    cp = annual.loc[annual["policy"] == "CP", keys + ["facility_energy_mwh", "carbon_tco2"]].rename(
+        columns={"facility_energy_mwh": "cp_facility_energy_mwh", "carbon_tco2": "cp_carbon_tco2"})
+    other = annual.loc[annual["policy"] != "CP"].merge(cp, on=keys, validate="many_to_one")
+    if not np.allclose(other["facility_energy_mwh"], other["cp_facility_energy_mwh"], rtol=1e-10, atol=1e-6):
+        raise ValueError("Policy comparison must hold country/year electricity fixed.")
+    countries = list(annual["country"].unique())
+    years = sorted(annual["year"].unique())
+    constraints = pd.DataFrame(annual_policy_audit(countries, years))
+    other = other.merge(constraints.drop(columns="scope"), on=["country", "year", "policy"], validate="many_to_one")
+    other["observed_emissions_ratio"] = np.divide(
+        other["carbon_tco2"], other["cp_carbon_tco2"], out=np.full(len(other), np.nan),
+        where=other["cp_carbon_tco2"].to_numpy() != 0)
+    other["scalar_expected_carbon_tco2"] = other["cp_carbon_tco2"] * other["actual_annual_ratio"]
+    other["scalar_emissions_residual_tco2"] = other["carbon_tco2"] - other["scalar_expected_carbon_tco2"]
+    other["scalar_emissions_identity_holds"] = np.isclose(
+        other["carbon_tco2"], other["scalar_expected_carbon_tco2"], rtol=1e-9, atol=1e-6)
+    evidence = grid[keys + ["policy", "scope", "carbon_factor_source", "calendar_status",
+                           "eligible_for_full_calendar_hourly_claim"]]
+    other = other.merge(evidence, on=keys + ["policy"], validate="one_to_one")
+    cp_evidence = evidence.loc[evidence["policy"] == "CP"].drop(columns=["policy", "scope"]).rename(
+        columns={c: f"cp_{c}" for c in evidence.columns if c not in keys + ["policy", "scope"]})
+    other = other.merge(cp_evidence, on=keys, validate="many_to_one")
+    other["both_policies_have_full_hourly_inputs"] = (
+        other["eligible_for_full_calendar_hourly_claim"] & other["cp_eligible_for_full_calendar_hourly_claim"])
+    return other
 
 
 def generate_figure2_data(
@@ -362,12 +355,14 @@ def generate_figure2_data(
     max_intervals: Optional[int] = None,
     country_display_top_n: int = 8,
     verbose: bool = True,
+    ai_capacity_factors: Optional[Mapping[int, float]] = None,
+    experiment_context=None,
 ) -> Path:
     """Calculate all Figure 2 panel data and write one Excel workbook."""
-    countries = list(countries)
+    countries = resolve_countries(countries)
     if verbose:
-        print("[figure2] Building the shared GPU workload profile.", flush=True)
-    profile = build_workload_profile(
+        print("[figure2] Reusing the prepared workload profile." if experiment_context is not None else "[figure2] Building the workload profile.", flush=True)
+    profile = experiment_context.profile if experiment_context is not None else build_workload_profile(
         workload_profile_path=workload_profile_path,
         server_profile_path=server_profile_path,
         capacity_quantile=capacity_quantile,
@@ -376,32 +371,36 @@ def generate_figure2_data(
     )
 
     annual_frames = []
+    grid_frames = []
     for policy in POLICIES:
         if verbose:
             print(
                 f"[figure2] Calculating hourly workload-resolved results for {policy}.",
                 flush=True,
             )
-        annual_frames.append(
-            _run_policy(
-                policy=policy,
-                scenario=scenario,
-                countries=countries,
-                year_start=year_start,
-                years=years,
-                workload_profile_path=workload_profile_path,
-                server_profile_path=server_profile_path,
-                hourly_carbon_factors_dir=hourly_carbon_factors_dir,
-                hourly_carbon_scope=hourly_carbon_scope,
-                hourly_carbon_fallback_to_annual=hourly_carbon_fallback_to_annual,
-                capacity_quantile=capacity_quantile,
-                max_resource_utilization=max_resource_utilization,
-                max_intervals=max_intervals,
-                profile=profile,
-                verbose=verbose,
-            )
+        annual, grid = _run_policy(
+            policy=policy,
+            scenario=scenario,
+            countries=countries,
+            year_start=year_start,
+            years=years,
+            workload_profile_path=workload_profile_path,
+            server_profile_path=server_profile_path,
+            hourly_carbon_factors_dir=hourly_carbon_factors_dir,
+            hourly_carbon_scope=hourly_carbon_scope,
+            hourly_carbon_fallback_to_annual=hourly_carbon_fallback_to_annual,
+            capacity_quantile=capacity_quantile,
+            max_resource_utilization=max_resource_utilization,
+            max_intervals=max_intervals,
+            profile=profile,
+            ai_capacity_factors=ai_capacity_factors,
+            model_runner=experiment_context.run_hourly if experiment_context is not None else None,
+            verbose=verbose,
         )
+        annual_frames.append(annual)
+        grid_frames.append(grid)
     annual_summary = pd.concat(annual_frames, ignore_index=True)
+    grid_audit = pd.concat(grid_frames, ignore_index=True)
 
     global_emissions = (
         annual_summary.groupby(
@@ -465,14 +464,34 @@ def generate_figure2_data(
     )
 
     sheets = {
+        "Grid_Scenario_Definition": pd.DataFrame([{
+            "scenario_kind": GRID_SCENARIO_KIND,
+            "interpretation": "conditional_input_scenarios_not_independent_policy_effects_or_grid_forecasts",
+            "scope": hourly_carbon_scope,
+            "annual_factor_scope": "direct",
+            "trace_intervals": profile.n_intervals,
+            "trace_hours": profile.trace_hours,
+            "trace_truncated_by_max_intervals": max_intervals is not None,
+            "max_intervals": max_intervals,
+            "policy_formula": "CP * endpoint**((year-2025)/5), rounded annual inputs; NDC endpoint=0.89, NZ=0.53",
+            "closure_rule": "direct hourly mean equals rounded annual input; life-cycle annual comparison unavailable",
+        }]),
+        "Grid_Input_Audit": grid_audit,
+        "Annual_Policy_Identity": pd.DataFrame(annual_policy_audit(countries, range(year_start, year_start + years))),
+        "Policy_Effect_Audit": _policy_effect_audit(annual_summary, grid_audit),
+        "Accounting_Boundary": build_boundary_metadata(countries, ai_capacity_factors),
+        "AI_Capacity_Factors": capacity_factor_table(year_start, years, ai_capacity_factors),
         "Fig2a_CF_Map": _carbon_factor_map_table(countries, year_start, years),
         "Fig2b_Country_Abatement": country_abatement,
-        "Fig2c_Global_Carbon": global_carbon,
+        "Fig2c_Selected_Countries_Carbon": global_carbon,
         "Fig2d_Weighted_CI": weighted_carbon_intensity,
         "Source_Fig2b_Countries": country_source,
     }
     resolved_output = Path(output_path)
-    _write_workbook(resolved_output, sheets)
+    if experiment_context is not None:
+        sheets["Shared_Experiment_Configuration"] = experiment_context.metadata_table()
+    sheets = prepare_figure_sources(2, sheets, carbon_scope=hourly_carbon_scope)
+    write_workbook(resolved_output, sheets)
     if verbose:
         print(f"[figure2] Excel workbook saved to {resolved_output.resolve()}.")
     return resolved_output
@@ -500,6 +519,7 @@ def _parse_args() -> argparse.Namespace:
         "--hourly-carbon-scope", choices=("direct", "life_cycle"), default="direct"
     )
     parser.add_argument("--strict-hourly-carbon", action="store_true")
+    parser.add_argument("--ai-capacity-factors-file", type=Path, default=None)
     parser.add_argument("--capacity-quantile", type=float, default=0.96)
     parser.add_argument("--max-resource-utilization", type=float, default=1.0)
     parser.add_argument(
@@ -527,6 +547,8 @@ def main() -> None:
         output_path=args.output,
         scenario=args.scenario,
         countries=args.countries,
+        ai_capacity_factors=(load_ai_capacity_factors(args.ai_capacity_factors_file, args.countries)
+                             if args.ai_capacity_factors_file else None),
         year_start=args.year_start,
         years=args.years,
         workload_profile_path=args.workload_profile_path,

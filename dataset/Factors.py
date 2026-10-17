@@ -89,6 +89,53 @@ CARBON_FACTOR_YEAR_START = 2017
 CARBON_FACTOR_YEAR_END = 2030
 CARBON_FACTORS = {"CP": CF_CP, "NDC": CF_NDC, "NZ": CF_NZ}
 
+# These are conditional, stylized scenarios, not independently estimated
+# country policy effects. Keep the published rounded annual arrays unchanged.
+CARBON_FACTOR_SCOPE = "direct"
+GRID_SCENARIO_KIND = "stylized_uniform_policy_scaling"
+POLICY_SCALING_BASE_YEAR = 2025
+POLICY_SCALING_END_YEAR = 2030
+POLICY_ENDPOINT_MULTIPLIERS = {"CP": 1.0, "NDC": 0.89, "NZ": 0.53}
+ANNUAL_FACTOR_ROUNDING_TOLERANCE = 0.005000001
+
+
+def get_policy_multiplier(policy: str, year: int) -> float:
+    """Intended multiplier; actual annual ratios also include 0.01 rounding."""
+    if policy not in POLICY_ENDPOINT_MULTIPLIERS:
+        raise ValueError(f"Unknown carbon policy: {policy}")
+    if not CARBON_FACTOR_YEAR_START <= year <= CARBON_FACTOR_YEAR_END:
+        raise ValueError("Policy multiplier year is outside the annual input range.")
+    progress = max(0, year - POLICY_SCALING_BASE_YEAR) / (
+        POLICY_SCALING_END_YEAR - POLICY_SCALING_BASE_YEAR
+    )
+    return POLICY_ENDPOINT_MULTIPLIERS[policy] ** progress
+
+
+def annual_policy_audit(countries, years):
+    """Report the imposed trajectory separately from its rounded annual input."""
+    years = tuple(years)
+    records = []
+    for country in countries:
+        for year in years:
+            cp = get_carbon_factor("CP", country, year)
+            for policy in ("NDC", "NZ"):
+                value = get_carbon_factor(policy, country, year)
+                multiplier = get_policy_multiplier(policy, year)
+                residual = value - cp * multiplier
+                records.append({
+                    "country": country, "year": year, "policy": policy,
+                    "scenario_kind": GRID_SCENARIO_KIND,
+                    "scope": CARBON_FACTOR_SCOPE,
+                    "cp_annual_ci_kg_per_mwh": cp,
+                    "annual_ci_kg_per_mwh": value,
+                    "intended_multiplier": multiplier,
+                    "actual_annual_ratio": value / cp if cp else float("nan"),
+                    "rounding_residual_kg_per_mwh": residual,
+                    "within_rounding_tolerance": abs(residual) <= ANNUAL_FACTOR_ROUNDING_TOLERANCE,
+                    "interpretation": "input_constraint_not_independent_policy_effect",
+                })
+    return records
+
 
 def _validate_carbon_factor_data():
     expected_count = CARBON_FACTOR_YEAR_END - CARBON_FACTOR_YEAR_START + 1

@@ -8,17 +8,13 @@ import numpy as np
 import pandas as pd
 
 from dataset.Factors import CARBON_FACTORS, PUE, get_carbon_factor
-from dataset.Installed_capacity_data import IT_CAPACITY, IT_RATIO
+from dataset.Installed_capacity_data import IT_CAPACITY, IT_RATIO, SCENARIO_COLUMNS as SCENARIO_COLUMN
 from core.task_model import TASK_TYPES, build_country_task_ratio_table
+from core.annual_activity import AnnualActivityConfig
 
 
 DATA_YEAR_START = 2025
-SCENARIO_COLUMN = {
-    "Base": 0,
-    "Lift-Off": 1,
-    "High Efficiency": 2,
-    "Headwinds": 3,
-}
+
 def calculate_past_research_energy_carbon(
     renewable_energy_policy: str,
     scenario: str,
@@ -34,6 +30,7 @@ def calculate_past_research_energy_carbon(
     idle_power_rate: float = 0.23,
     max_power_rate: float = 0.88,
     pue_scale: float = 1.0,
+    activity_config: Optional[AnnualActivityConfig] = None,
 ) -> Dict[str, pd.DataFrame]:
     """
     Calculate annual data-centre energy use and carbon emissions.
@@ -45,6 +42,7 @@ def calculate_past_research_energy_carbon(
 
     The method always starts from the native 2025 input year. Returned units:
     ``country_power`` is TWh and ``country_carbon`` is MtCO2.
+    Activity anchors are fixed at 2025/2030 independently of ``years``.
     """
     if not 1 <= years <= IT_CAPACITY.shape[0]:
         raise ValueError(f"years must be within 1-{IT_CAPACITY.shape[0]}.")
@@ -61,10 +59,12 @@ def calculate_past_research_energy_carbon(
     }.items():
         if not 0.0 <= float(value) <= 1.0:
             raise ValueError(f"{name} must be in [0, 1], got {value}")
-    if not 0.0 <= idle_power_rate <= max_power_rate:
-        raise ValueError("Power rates must satisfy 0 <= idle_power_rate <= max_power_rate.")
-    if pue_scale <= 0:
-        raise ValueError("pue_scale must be positive.")
+    if not np.isfinite(idle_power_rate) or not np.isfinite(max_power_rate) or not 0.0 <= idle_power_rate <= max_power_rate:
+        raise ValueError("Power rates must be finite and satisfy 0 <= idle <= maximum.")
+    if not np.isfinite(pue_scale) or pue_scale <= 0:
+        raise ValueError("pue_scale must be finite and positive.")
+    activity_config = activity_config or AnnualActivityConfig()
+    activity_config.validate()
 
     countries = list(countries)
     missing_countries = [country for country in countries if country not in IT_RATIO]
@@ -79,18 +79,7 @@ def calculate_past_research_energy_carbon(
         default_p_other=default_p_other,
     )
 
-    year_index = np.arange(years, dtype=float)
-    training_activity = 0.9 + (0.925 - 0.9) / years * year_index
-    inference_activity = 0.5 + (0.7 - 0.5) / years * year_index
-    activity = np.stack(
-        [
-            training_activity,
-            inference_activity,
-            inference_activity,
-            inference_activity,
-        ],
-        axis=1,
-    )
+    activity = np.stack([activity_config.vector(year) for year in range(DATA_YEAR_START, DATA_YEAR_START + years)])
     utilization_rates = np.array([u_train, u_infer, u_other, u_other], dtype=float)
     task_utilization = (
         task_ratios[None, :, :]
@@ -145,6 +134,9 @@ def calculate_past_research_energy_carbon(
                         "year": int(year),
                         "country": country,
                         "task_type": task_type,
+                        "activity_mode": activity_config.mode,
+                        "activity_factor": activity[year_id, task_type_id],
+                        "assumed_task_utilization": utilization_rates[task_type_id],
                         "task_ratio": task_ratios[country_id, task_type_id],
                         "utilization_contribution": task_utilization[
                             year_id, country_id, task_type_id
@@ -172,4 +164,5 @@ def calculate_past_research_energy_carbon(
             columns=countries,
         ),
         "task_type_energy": pd.DataFrame.from_records(task_records),
+        "activity_factors": activity_config.table(range(DATA_YEAR_START, DATA_YEAR_START + years)),
     }

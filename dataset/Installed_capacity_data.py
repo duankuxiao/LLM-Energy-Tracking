@@ -1,5 +1,15 @@
 import numpy as np
 
+SCENARIO_COLUMNS = {"Base": 0, "Lift-Off": 1, "High Efficiency": 2, "Headwinds": 3}
+COUNTRY_ISO3 = {
+    "USA": "USA", "China": "CHN", "Japan": "JPN", "France": "FRA", "India": "IND",
+    "Singapore": "SGP", "Canada": "CAN", "Germany": "DEU", "United_Kingdom": "GBR",
+    "Australia": "AUS", "Italy": "ITA", "South_Korea": "KOR", "South_Africa": "ZAF",
+    "Ireland": "IRL", "UAE": "ARE", "Brazil": "BRA", "Israel": "ISR", "Netherlands": "NLD",
+    "Spain": "ESP", "Sweden": "SWE", "Belgium": "BEL", "Norway": "NOR", "Poland": "POL",
+    "Switzerland": "CHE",
+}
+
 DEFAULT_COUNTRIES = [
     "USA", "China", "Japan", "France", "India", "Singapore",
     "Canada", "Germany", "United_Kingdom", "Australia", "Italy", "South_Korea",
@@ -29,7 +39,38 @@ NON_IT_RATIO = {
     "USA": 0.384990323, "China": 0.402432258, "Canada": 0.02, "Australia": 0.029677419, "Japan": 0.027741935, "Germany": 0.024193548,
     "United_Kingdom": 0.023548387, "Norway": 0.021612903, "India": 0.023870968, "France": 0.017419355, "South_Korea": 0.010645161, "Italy": 0.008064516,
     "Spain": 0.008064516, "Switzerland": 0.007741935, "Netherlands": 0.007419355, "Singapore": 0.007741935, "Poland": 0.006774194, "Ireland": 0.00516129,
-    "Sweden": 0.004516129, "South_frica": 0.004193548, "Brazil": 0.002903226, "UAE": 0.002580645, "Belgium": 0.000967742, "Israel": 0.001612903
+    "Sweden": 0.004516129, "South_Africa": 0.004193548, "Brazil": 0.002903226, "UAE": 0.002580645, "Belgium": 0.000967742, "Israel": 0.001612903
+}
+
+# Study outputs cover the 24 major AI countries listed above. Country selection
+# is based on the availability of source-based country capacity and grid data,
+# not on an independently verified ranking of national AI activity. The original
+# capacity shares are retained; their sum is not an electricity coverage estimate.
+STUDY_SCOPE_LABEL = "24 major AI countries worldwide"
+
+# Global reference pathway, retained separately from selected-country outputs.
+# IEA (2026), Key Questions on Energy and AI, Figure 1.5 (p.25), text on p.26:
+# https://www.iea.org/reports/key-questions-on-energy-and-ai
+# 465 TWh is an approximate global Base Case projection for 2030. The 2025
+# value is an approximate chart transcription; 2026-2029 are author estimates.
+# Legacy factors below applied this global reference to the selected-country
+# sum. They are preserved for comparison, not silently relabelled as calibrated
+# against independently observed 24-country electricity targets.
+BASE_GLOBAL_ELECTRICITY_REFERENCE_TWH = {
+    2025: 150.0,
+    2026: 195.0,
+    2027: 249.600,
+    2028: 314.496,
+    2029: 386.830,
+    2030: 465.0,
+}
+BASE_ELECTRICITY_REFERENCE_ROLE = {
+    2025: "approximate_global_historical_anchor_from_IEA_figure",
+    2026: "author_defined_interpolation",
+    2027: "author_defined_interpolation",
+    2028: "author_defined_interpolation",
+    2029: "author_defined_interpolation",
+    2030: "approximate_IEA_global_Base_Case_projection",
 }
 
 # Calibrate the all-data-centre IT capacity series to AI-focused data centres.
