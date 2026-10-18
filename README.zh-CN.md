@@ -10,7 +10,7 @@
 
 仓库术语与原稿保持一致：核心比较连接“**年度 CPU 模型**”和“**小时级工作负载解析模型**”，并通过有序 bridge 依次引入分部件功率、轨迹派生的平均工作负载、小时负荷变化和小时碳强度匹配。这里的端点和中间步骤均是模型配置；小时级端点不被视为实测真值。
 
-> **研究范围。** 本研究核算电力消耗、运行负荷和运行碳排放，不开展用水量或 WUE 分析。
+> **研究范围。** 本研究核算 2026–2030 年的电力消耗、运行负荷和基于所在地电网的运营碳排放，不包括隐含排放、水使用、合同购电、市场法 Scope 2 声明或严格的 24/7 无碳电力匹配。
 
 ## 核算框架
 
@@ -45,7 +45,14 @@
 | 电网路径与减排量（图 2） | [`dataset/Factors.py`](dataset/Factors.py)、[`scripts/figure2_data.py`](scripts/figure2_data.py) | [`results/figure2_data.xlsx`](results/figure2_data.xlsx) |
 | 年度—小时端点比较、有序 bridge、峰值和爬坡（图 3） | [`core/annual_cpu_model.py`](core/annual_cpu_model.py)、[`core/hourly_workload_resolved_model.py`](core/hourly_workload_resolved_model.py)、[`scripts/figure3_data.py`](scripts/figure3_data.py) | [`results/figure3_data.xlsx`](results/figure3_data.xlsx) |
 | 单因素敏感性分析（图 4） | [`scripts/figure4_data.py`](scripts/figure4_data.py) | [`results/figure4_data.xlsx`](results/figure4_data.xlsx) |
-| MLPerf 功率诊断与轨迹边界审查（补充图 S1） | [`scripts/validate_energy_model.py`](scripts/validate_energy_model.py)、[`dataset/validation/`](dataset/validation/) | 运行后写入 `results/model_validation/` |
+| MLPerf 功率诊断与轨迹边界审查（补充图 S1） | [`scripts/validate_energy_model.py`](scripts/validate_energy_model.py)、[`dataset/validation/`](dataset/validation/) | 总入口写入 `<output-dir>/validation/`，下文独立示例写入 `results/validation_run/` |
+| 全任务/部件闭合、额外敏感性与爬坡诊断（补充图 S2–S4） | [`scripts/plot_revision_supplements.py`](scripts/plot_revision_supplements.py) | 分别从图 1、4、3 的完整实验工作簿绘制 |
+
+`results/` 根目录下的四份工作簿仅供审稿人检查主图中实际展示的数据，保留绘图数值及对应坐标、标签和单位。图 1–4 分别包含 7、4、4、2 张工作表，不包含完整实验矩阵、未展示的结果或审计元数据。图 4 仅保留主图展示的六个参数，另外九个机制控制参数见补充图 S3。
+
+完整实验结果需要运行代码生成：每次配置运行将完整工作簿写入 `<output-dir>/data/`，验证表写入 `validation/`，运行记录写入 `provenance/`。绘图脚本要求完整工作簿及其 W08 契约，不能将精简审稿表作为绘图输入。当前修订图件对应的完整本地运行目录为 `results/all_experiments_calendar_20261017_092038_285/`；该生成目录不能替代外部输入准备与代码复现。
+
+当前正文与图件说明见[原稿](manuscript/sn-article-template/sn-article.tex)和[补充信息](manuscript/sn-article-template/supplementary-information.tex)。
 
 ## 研究范围与情景
 
@@ -84,7 +91,7 @@
 | 年度碳强度和 PUE 输入 | 已包含 | [`dataset/Factors.py`](dataset/Factors.py) |
 | 容量与需求路径输入 | 已包含 | [`dataset/Installed_capacity_data.py`](dataset/Installed_capacity_data.py) |
 | 外部诊断输入 | 已包含 | [`dataset/validation/`](dataset/validation/) |
-| 图 1—4 源数据工作簿 | 已包含 | [`results/`](results/) |
+| 图 1—4 展示面板的精简图源表 | 已包含 | [`results/`](results/)；完整实验数据需运行代码生成 |
 | Electricity Maps 小时数据及其派生情景文件 | **不公开分发** | 需从 Electricity Maps 合法取得 |
 | Alibaba GPU Pod 和服务器轨迹 | 未打包 | 需从 Alibaba Cluster Trace Program 获取 |
 | IEA 数据附件 | 不重新分发 | 需从 International Energy Agency 获取 |
@@ -95,7 +102,7 @@
 
 [`dataset/Installed_capacity_data.py`](dataset/Installed_capacity_data.py) 存放 2025—2030 年四类需求路径下的总容量、IT 容量和非 IT 容量，以及固定国家份额和年度 AI 容量因子。
 
-默认 AI 容量校准依据 IEA 报告 [Key Questions on Energy and AI](https://www.iea.org/reports/key-questions-on-energy-and-ai) 讨论的 AI 专用数据中心用电路径。校准端点与中间年份插值假设记录在源代码中。国家份额和中间情景值属于模型输入或派生参数，不应理解为原始数据提供方直接发布的逐国预测。
+默认 AI 容量校准依据 IEA 报告 [Key Questions on Energy and AI](https://www.iea.org/reports/key-questions-on-energy-and-ai) 讨论的 AI 专用数据中心用电路径。保留的因子将全球 Base 参考电量拟合到 24 国合计，2026–2030 年目标依次为 195、249.600、314.496、386.830、465 TWh。约 465 TWh 的端点是外部全球预测，中间目标为作者定义的插值输入；该校准不代表实测用电覆盖率。两个模型端点和所有需求路径使用同一组因子，敏感性实验不重新校准。国家份额和中间情景值属于模型输入或派生参数，不应理解为原始数据提供方直接发布的逐国预测。
 
 ### GPU 工作负载与服务器轨迹
 
@@ -114,13 +121,13 @@
 
 [`dataset/Factors.py`](dataset/Factors.py) 提供 24 国在 `CP`、`NDC` 和 `NZ` 路径下的年度电网碳强度，以及按国家、年份和需求路径区分的 PUE。碳强度单位为 `kg CO₂/MWh`。
 
-年度 CPU 模型直接使用年度因子；有序 bridge 的年度碳强度配置也使用这些因子。这套年度表采用直接排放边界，仅在 `direct` 模式下可作为缺失小时文件的回退值；生命周期模式缺文件会报错。
+2026–2030 年 CP 数值是存储在 `CF_CP` 中的固定输入，运行时不从历史观测重新外推。年度 CPU 模型直接使用年度因子；有序 bridge 的年度碳强度配置也使用这些因子。这套年度表采用直接排放边界，仅在 `direct` 模式下可作为缺失小时文件的回退值；生命周期模式缺文件会报错。
 
 ### 小时级电网碳强度
 
-小时模型预期在 `dataset/EM-CPNDCNZ/` 下读取 360 个本地 CSV：24 个国家 × 3 类电力系统路径 × 2026—2030 五年。文件包含 UTC 时间戳、直接碳强度和生命周期碳强度列。
+当前配置从 `results/grid_hourly_calendar/` 读取生成的 360 个本地 CSV：24 个国家 × 3 类电力系统路径 × 2026–2030 五年。原稿采用直接电网碳因子；小时模型的独立接口在输入适用时也支持生命周期因子。
 
-研究使用经授权的 2025 年 Electricity Maps 数据作为相对小时形状，并缩放至 [`dataset/Factors.py`](dataset/Factors.py) 中的年度路径。处理后的小时文件不公开分发。合资格研究人员需通过 Electricity Maps [数据页面](https://www.electricitymaps.com/data)或[学术访问说明](https://help.electricitymaps.com/en/articles/13168512-academic-data-access-and-availability)独立申请，并遵守最新许可条款。
+当前来源清单从 `dataset/EM-CPNDCNZ/` 中完整的处理后 2026 年 CP 文件重建相对小时形状，这些文件归属于 Electricity Maps 来源。原始 2025 年数据获取文件不可用，重建不能恢复或认证那些原始观测。模板映射到完整 UTC 日历后，归一化至 [`dataset/Factors.py`](dataset/Factors.py) 中的固定年度路径。处理后的小时文件不公开分发。研究人员需通过 Electricity Maps [数据页面](https://www.electricitymaps.com/data)或[学术访问说明](https://help.electricitymaps.com/en/articles/13168512-academic-data-access-and-availability)取得授权输入，并遵守提供方条款。
 
 ### W03 电网情景构造与审计
 
@@ -144,7 +151,7 @@ python -B scripts/figure2_data.py --hourly-carbon-factors-dir results/revision_a
 
 生成器拒绝缺测、重复/错序时间、负值和非有限值；保留源文件已有估算值并记录估算占比。`construction_audit.csv` 和 `construction_metadata.json` 记录来源/输出哈希、区域映射、模板年份、构造参数和均值。生命周期目标按“直接年度目标 × 模板生命周期/直接均值之比”构造并单独标注，不宣称与直接年度表闭合。`--variability-scale 0` 生成平坦 CI，`--variability-scale 2` 放大波动，`--phase-hours 12` 循环平移 12 小时；截断负值后恢复各自目标均值。这些是压力测试，不是电网预测。
 
-生成和审计输出目录必须不存在，原始输入不会被覆盖。模型新增 `grid_carbon_audit` 返回表及 `Grid_Carbon_Audit_*.csv`，即使不保存小时明细，也会记录实际来源、缺失回退、日历完整性、年电量守恒、CI 均值与负荷—CI 协变恒等式。图 2 增加 `Grid_Scenario_Definition`、`Grid_Input_Audit`、`Annual_Policy_Identity`、`Policy_Effect_Audit` 工作表，区分设定乘数和实际排放比例，并记录轨迹截取参数。生命周期模式的图 2a 仍是明确标注的直接年度 CP 参考图。
+生成和审计输出目录必须不存在，原始输入不会被覆盖。模型返回 `grid_carbon_audit` 表并保存 `Grid_Carbon_Audit_*.csv`，即使不保存小时明细，也会记录实际来源、缺失回退、日历完整性、年电量守恒、CI 均值与负荷—CI 协变恒等式。图 2 完整实验工作簿包含 `Grid_Scenario_Definition`、`Grid_Input_Audit`、`Annual_Policy_Identity`、`Policy_Effect_Audit` 工作表，区分设定乘数和实际排放比例，并记录轨迹截取参数。生命周期模式的图 2a 仍是明确标注的直接年度 CP 参考图。
 
 回归验证：`python -B -m unittest discover -s tests -v`（使用 README 所列 Python 依赖）。`--max-intervals` 输出仅供调试，不能作为正式论文重算结果。
 
@@ -164,12 +171,20 @@ python -B scripts/figure2_data.py --hourly-carbon-factors-dir results/revision_a
 │   ├── validation/
 │   ├── asi_opensource_pod_hourly/     # 外部本地输入
 │   └── asi_opensource_server_hourly/  # 外部本地输入
-├── results/                           # 生成结果与论文图源数据
+├── configs/                           # 实验配置与电网来源清单
+├── results/
+│   ├── figure1_data.xlsx ... figure4_data.xlsx  # 精简审稿图源表
+│   ├── grid_hourly_calendar/          # 生成的完整日历电网输入
+│   └── <run>/                        # 完整实验、审计与运行记录
 ├── scripts/
 │   ├── figure1_data.py
 │   ├── figure2_data.py
 │   ├── figure3_data.py
 │   ├── figure4_data.py
+│   ├── run_experiments.py
+│   ├── experiment_figure1.py ... experiment_figure4.py
+│   ├── plot_figures.py
+│   ├── plot_revision_supplements.py
 │   └── validate_energy_model.py
 ├── run.py                             # 两端点比较入口
 ├── LICENSE
@@ -179,21 +194,21 @@ python -B scripts/figure2_data.py --hourly-carbon-factors-dir results/revision_a
 
 ## 环境与依赖
 
-投稿复现包使用 Python 3.12.3，并固定以下版本：
+已完成的原稿运行在 `provenance/<run-id>/run_metadata.json` 中记录 Python 3.9.25 及以下依赖版本：
 
-- `numpy==2.1.3`
-- `pandas==2.2.3`
-- `pyarrow==17.0.0`
+- `numpy==1.26.4`
+- `pandas==2.3.3`
+- `pyarrow==21.0.0`
 - `openpyxl==3.1.5`
 - `matplotlib==3.9.2`
 
-在仓库根目录创建环境：
+使用 Python 3.9.25，在仓库根目录创建环境：
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install numpy==2.1.3 pandas==2.2.3 pyarrow==17.0.0 openpyxl==3.1.5 matplotlib==3.9.2
+python -m pip install numpy==1.26.4 pandas==2.3.3 pyarrow==21.0.0 openpyxl==3.1.5 matplotlib==3.9.2
 ```
 
 Linux 或 macOS：
@@ -246,8 +261,12 @@ dataset/
 
 ```powershell
 python -B scripts/build_hourly_grid_scenarios.py --source-manifest configs/hourly_grid_sources.csv --output-dir results/grid_hourly_calendar --scopes direct
-python -B scripts/run_experiments.py --config configs/experiments.json
+python -B scripts/run_experiments.py --config configs/experiments.json --output-dir results/reproduction_run
+python -B scripts/plot_figures.py --input-dir results/reproduction_run/data --output-dir results/reproduction_run/figures --figures 1 2 3 4 --style original --formats svg pdf png tiff jpg --dpi 600
+python -B scripts/plot_revision_supplements.py --input-dir results/reproduction_run/data --output-dir results/reproduction_run/figures --dpi 600
 ```
+
+第一条命令构造电网输入，第二条计算实验，最后两条绘制主图和补充图 S2–S4；补充图 S1 由下文的外部诊断命令生成。每次实验使用新的输出目录。若电网目录已成功生成且输入未变，可复用并从实验命令开始。绘图始终显式指定完整运行的 `data/` 目录。
 
 [`configs/hourly_grid_sources.csv`](configs/hourly_grid_sources.csv) 已列出 24 国
 完整的 2026 年 CP 文件，来源类型均标为 `reconstructed_shape`。现有 2028 年
@@ -266,7 +285,7 @@ python -B scripts/run_experiments.py --config configs/experiments.json
 所有 JSON 配置路径相对于仓库根目录，CSV 来源路径相对于清单所在目录。
 [`configs/experiments.json`](configs/experiments.json) 已将电网输入指向
 `results/grid_hourly_calendar`，结果输出指向 `results/all_experiments_calendar`，
-保留之前 `results/all_experiments` 中的失败记录。若已采用新校准因子，设置
+可按上例通过 `--output-dir` 覆盖结果目录。若已采用新校准因子，设置
 `inputs.ai_capacity_factors_file`。默认要求严格小时直接碳因子、
 24 国和 2026–2030 年，与图 3 的既有范围一致；日历及 CI 均值校验在读取大轨迹
 前执行。小范围分析通过 `--only` 选择适用实验：
@@ -307,7 +326,7 @@ python -B scripts/plot_figure4.py --input-dir results/figure4_recalculated/data 
 
 图 1/2/3 使用相应编号。独立实验的默认目录为 `output.directory` 加图名后缀。
 独立绘图仅读取导出的工作簿，不重新运行模型或读取原始轨迹。本配置的图源
-目录为 `results/all_experiments_calendar/data`，绘图时使用 `--input-dir` 指定；
+目录为 `<output-dir>/data`（例如 `results/reproduction_run/data`），绘图时使用 `--input-dir` 指定；
 绘图脚本自身的默认目录仍为 `results/all_experiments/data`。
 原有 `figure*_data.py` 接口保留；需要总配置时使用
 `experiment_figure*.py`。
@@ -331,7 +350,7 @@ results/all_experiments_calendar/
     └── run_metadata.json
 ```
 
-工作簿在 W08 图源契约之外增加 `Shared_Experiment_Configuration`。总运行记录
+完整实验工作簿在 W08 图源契约之外包含 `Shared_Experiment_Configuration`。总运行记录
 包含实际配置、逐实验状态和耗时、数据读取计数、源码版本及输入/输出清单。
 实验失败时停止后续实验并记录已完成产物；端点比较复用总入口的同一份
 运行记录；独立运行端点比较时仍生成自身的 W09 记录。边界实验比较自己的原/重建校准因子，不自动替换主图使用的因子。
@@ -342,14 +361,14 @@ results/all_experiments_calendar/
 Parquet 计算哈希；保持默认 false 可避免此开销。电网 CSV 从解析所用的同一份
 字节缓冲计算哈希。共享上下文仅保留聚合输入，不累积所有敏感性实验的大结果表。
 
-本次只准备代码与说明，没有执行实验、测试或绘图。
+下文 W03–W09 工作表名称均指完整实验输出，不指 `results/` 根目录下的精简审稿表。
 
 ### 独立边界与校准对照
 
 默认因子保留原校准结果：它把全球参考电量目标拟合到了 24 国合计。下列命令比较原因子、重新计算的全球参考因子，以及“覆盖地区与其他地区单位 IT 容量设施用电相同”的条件对照。两端点使用同一组因子。条件对照不会自动替代正式主分析。
 
 ```powershell
-python -B scripts/analyze_boundary_calibration.py --strict-hourly-carbon --output-dir results/revision_audit/boundary
+python -B scripts/analyze_boundary_calibration.py --hourly-carbon-factors-dir results/grid_hourly_calendar --strict-hourly-carbon --output-dir results/revision_audit/boundary
 ```
 
 先检查 `calibration_audit.csv`、`endpoint_comparison.csv` 和 `invariant_checks.csv`。输出目录必须是新目录。`--max-intervals` 仅供调试，调试生成的因子会被正式入口拒绝读取。
@@ -357,38 +376,40 @@ python -B scripts/analyze_boundary_calibration.py --strict-hourly-carbon --outpu
 确认使用同质强度条件对照后，可将导出的共同因子传给比较入口：
 
 ```powershell
-python -B run.py --policy CP --scenarios Base --strict-hourly-carbon --ai-capacity-factors-file results/revision_audit/boundary/ai_capacity_factors_homogeneous_intensity_boundary.json --output-dir results/revision_audit/boundary_models
+python -B run.py --policy CP --scenarios Base --hourly-carbon-factors-dir results/grid_hourly_calendar --strict-hourly-carbon --ai-capacity-factors-file results/revision_audit/boundary/ai_capacity_factors_homogeneous_intensity_boundary.json --output-dir results/revision_audit/boundary_models
 ```
 
-图 1–4 数据脚本同样支持 `--ai-capacity-factors-file`，并输出 `Accounting_Boundary` 工作表。新图源中，图 1a 容量列为覆盖国家合计，`source_global_*` 列保留外部参考；图 1b 同时给出原始分配份额和 24 国内部份额。旧工作簿与 JPG 尚须重新生成。
+图 1–4 数据脚本同样支持 `--ai-capacity-factors-file`，完整工作簿包含 `Accounting_Boundary` 和 `AI_Capacity_Factors` 工作表。图 1a 容量列为覆盖国家合计，`source_global_*` 列保留外部参考；图 1b 完整表区分原始分配份额和 24 国内部份额，主图和精简审稿表仅使用原始全球分母。图 2c 完整表名为 `Fig2c_Selected_Countries_Carbon`，精简审稿表名为 `Fig2c_Annual_Emissions`。审稿表仅保留图中展示的数据。
 
 ### 比较两个端点模型
 
 ```powershell
-python run.py --policy CP --scenarios Base --year-start 2026 --years 5
+python -B run.py --policy CP --scenarios Base --year-start 2026 --years 5 --hourly-carbon-factors-dir results/grid_hourly_calendar --strict-hourly-carbon --output-dir results/comparison_run
 ```
 
-入口程序读取一次工作负载轨迹，运行年度 CPU 端点和小时级工作负载解析端点，并将结果写入 `results/model_comparison/`。可同时指定多个需求路径：
+入口程序读取一次工作负载轨迹，运行年度 CPU 端点和小时级工作负载解析端点，并将结果写入指定的 `--output-dir`（省略时为 `results/model_comparison/`）。可同时指定多个需求路径：
 
 ```powershell
-python run.py --policy NDC --scenarios Base "Lift-Off" "High Efficiency"
+python -B run.py --policy NDC --scenarios Base "Lift-Off" "High Efficiency" --hourly-carbon-factors-dir results/grid_hourly_calendar --strict-hourly-carbon --output-dir results/comparison_ndc_run
 ```
 
 快速执行检查可限制国家和轨迹小时数：
 
 ```powershell
-python run.py --countries USA --year-start 2026 --years 1 --max-intervals 24
+python -B run.py --countries USA --year-start 2026 --years 1 --max-intervals 24 --hourly-carbon-factors-dir results/grid_hourly_calendar --strict-hourly-carbon --output-dir results/comparison_debug_run
 ```
 
 `max_intervals` 会改变轨迹采样基础，仅用于 smoke test 和调试；生成论文结果时必须省略。
 
-### 生成论文图源数据
+### 独立图源数据接口
+
+上述配置入口生成全部四份完整工作簿。若使用保留的独立数据接口，必须显式指定其他输出文件；其默认路径是 `results/` 根目录下的精简审稿表，直接无参数运行会将其替换为完整实验工作簿。
 
 ```powershell
-python scripts/figure1_data.py
-python scripts/figure2_data.py
-python scripts/figure3_data.py
-python scripts/figure4_data.py
+python -B scripts/figure1_data.py --hourly-carbon-factors-dir results/grid_hourly_calendar --strict-hourly-carbon --output results/standalone_data/figure1_data.xlsx
+python -B scripts/figure2_data.py --hourly-carbon-factors-dir results/grid_hourly_calendar --strict-hourly-carbon --output results/standalone_data/figure2_data.xlsx
+python -B scripts/figure3_data.py --hourly-carbon-factors-dir results/grid_hourly_calendar --strict-hourly-carbon --output results/standalone_data/figure3_data.xlsx
+python -B scripts/figure4_data.py --hourly-carbon-factors-dir results/grid_hourly_calendar --strict-hourly-carbon --output results/standalone_data/figure4_data.xlsx
 ```
 
 图 3 脚本是有序 bridge 的权威实现。写入工作簿前，它会检查配置覆盖、国家聚合、小时—年度能耗闭合以及 bridge 加和闭合。
@@ -410,7 +431,7 @@ foreach ($activityMode in @("calendar", "fixed", "legacy_six_year")) {
 正式生成图 3 及完整 W04 对照，使用 W03 已生成的完整日历小时输入：
 
 ```powershell
-python -B scripts/figure3_data.py --annual-activity-mode calendar --hourly-carbon-factors-dir results/revision_audit/grid_w03/hourly_calendar --strict-hourly-carbon --output results/revision_w04/figure3_w04.xlsx
+python -B scripts/figure3_data.py --annual-activity-mode calendar --hourly-carbon-factors-dir results/grid_hourly_calendar --strict-hourly-carbon --output results/revision_w04/figure3_w04.xlsx
 ```
 
 该命令读取完整轨迹一次，自动计算三种年度活动配置，以及共同均值负荷的固定活动和对称活动趋势配置。共同均值先按小时模型相同的规则截断资源利用率，再对每个任务和资源取均值；年度聚合模型使用相同的 CPU 均值，分部件模型另使用明确记录的 GPU/内存/存储均值。对称趋势按任务的 `a(year)/a(2025)` 同时施加到两端共同负荷，截断前后数值均导出。两种共同均值配置使用平坦负荷与相同的年度直接碳强度，不夹带小时 CI 匹配差异。运行时检查共同 CPU 活动和安装容量一致性。
@@ -443,12 +464,12 @@ python -B scripts/figure3_data.py --annual-activity-mode calendar --hourly-carbo
 
 三种规则的动态能量均按小时驱动活动分摊。无部件驱动活动时，回退改用各资源按容量归一化后的代理份额，避免混加 CPU 核时、GPU 时和内存等原始单位；所有资源均无活动时采用显式的四任务均分参考。`allocation_audit` 记录驱动是否可用、零驱动时段和回退依据。storage 缺少动态观测，memory 是 CPU 加权代理；这类归属为模型假设。GPU-memory 字段不能替代主机内存容量或该代理。
 
-图 1 已直接读取模型矩阵，包含 storage 和新增的 `Fig1_Unclassified` 工作表。跨国家和年度的份额均先汇总绝对能量，再用相应能量总量作分母；`display_share_pct` 现在包含任务的全部五个部件。独立空闲池模式下，任务能量占系统比例之和小于 100%，剩余部分在 `W05_Idle_Pool` 显式列出。设施能量按同一国家年度 PUE 比例归属，不能解释为实测部件冷却能量。
+图 1 完整工作簿直接读取模型矩阵，包含 storage 和 `Fig1_Unclassified` 工作表。跨国家和年度的份额均先汇总绝对能量，再用相应能量总量作分母；`display_share_pct` 包含任务的全部五个部件。独立空闲池模式下，任务能量占系统比例之和小于 100%，剩余部分在 `W05_Idle_Pool` 显式列出。设施能量按同一国家年度 PUE 比例归属，不能解释为实测部件冷却能量。
 
 在已配置依赖的项目 Python 环境中，从仓库根目录手动生成图 1 图源及三种归属对照：
 
 ```powershell
-python -B scripts/figure1_data.py --hourly-carbon-factors-dir results/revision_audit/grid_w03/hourly_calendar --strict-hourly-carbon --idle-allocation-rule hourly_driver --output results/revision_w05/figure1_w05.xlsx
+python -B scripts/figure1_data.py --hourly-carbon-factors-dir results/grid_hourly_calendar --strict-hourly-carbon --idle-allocation-rule hourly_driver --output results/revision_w05/figure1_w05.xlsx
 ```
 
 该命令默认包含四个需求情景，轨迹只读取一次，三种归属对照自动随每个情景输出；不需要分别重复运行三种规则。若要用独立空闲池作为任务面板的主配置，改为 `--idle-allocation-rule separate_pool` 并选择另一个输出文件。
@@ -468,7 +489,7 @@ python -B scripts/figure1_data.py --hourly-carbon-factors-dir results/revision_a
 生成图 4 敏感性和机制诊断：
 
 ```powershell
-python -B scripts/figure4_data.py --hourly-carbon-factors-dir results/revision_audit/grid_w03/hourly_calendar --strict-hourly-carbon --idle-allocation-rule hourly_driver --output results/revision_w05/figure4_w05.xlsx
+python -B scripts/figure4_data.py --hourly-carbon-factors-dir results/grid_hourly_calendar --strict-hourly-carbon --idle-allocation-rule hourly_driver --output results/revision_w05/figure4_w05.xlsx
 ```
 
 图 4 的 `W05_Resource_Changes` 比较各资源的源活动、容量归一化活动、截断和实际资源量；`W05_Control_Checks` 分别记录源资源量、截断后归一化活动、电量和 CI 均值是否保持。任务混合调整须保留所有源资源总量及 unclassified 活动；CI-only 控制须逐国逐年保留电量和 CI 均值。其他参数下，电量变化不因资源总量保持而被判为错误。
@@ -480,10 +501,10 @@ python -B scripts/figure4_data.py --hourly-carbon-factors-dir results/revision_a
 ### 运行外部诊断
 
 ```powershell
-python scripts/validate_energy_model.py --bootstrap-replicates 10000
+python -B scripts/validate_energy_model.py --bootstrap-replicates 10000 --seed 20260819 --output-dir results/validation_run --figure-stem results/validation_run/figures/supplementary_energy_validation
 ```
 
-诊断流程使用固定随机种子 `20260819`。输入来源和筛选规则记录在 [`dataset/validation/`](dataset/validation/) 中。
+该独立命令生成补充图 S1 和诊断表，并自行读取轨迹窗口；配置总入口则在共享数据读取时导出验证表，不绘图。诊断采用固定随机种子 `20260819`，按 Public ID 进行 10,000 次 bootstrap。输入来源和筛选规则记录在 [`dataset/validation/`](dataset/validation/) 中。
 
 ### W06 接缝、国别形状与时序稳健性
 
@@ -504,7 +525,7 @@ python scripts/validate_energy_model.py --bootstrap-replicates 10000
 
 两类控制的保持量分别定义。上述时序压力在功率计算后逐国保持年度设施电量；负荷变形不推断资源小时守恒，也不强制物理空闲底座。除明确的 CI 均值 ±10% 情景，CI 年均值保持，但负荷加权排放可以因协变改变。图 4 另增加 `pre_power_resource_variability_scale=0.5/1/1.5`：在功率计算前逐任务、逐资源保持源资源总量，固定容量分母和硬件参数，重新计算容量截断和非线性功率。截断后资源量、电量及空闲占比是否保持由 W05/W06 表分别报告，不预设相等；已有 GPU 空闲比例实验也导出时序指标，供检查空闲底座对峰均比和爬坡的影响。
 
-采用完整 UTC 日历匹配，2028 年为 8,784 h；年度电量仍是完整轨迹按 8,760 h 年化后分布到目标日历的总量。本项不重新校准年度电量。旧的截短闰年输入和年度 CI 回退继续显式标注。正式运行时沿用图 3/图 4 入口，并指定 W03 完整日历目录及 `--strict-hourly-carbon`。本轮仅更新源代码，未执行模型或测试，既有结果文件需在全部修改完成后重新生成。
+采用完整 UTC 日历匹配，2028 年为 8,784 h；年度电量仍是完整轨迹按 8,760 h 年化后分布到目标日历的总量，不重新校准。旧的截短闰年输入和年度 CI 回退继续显式标注。正式运行使用图 3/图 4 入口，并指定 `--hourly-carbon-factors-dir results/grid_hourly_calendar` 和 `--strict-hourly-carbon`。补充图 S4 展示原始、异常边过滤及 P95/P99 爬坡诊断；完整 W06 表保留时序控制和接缝记录。
 
 `validate_energy_model.py` 的接缝检查仍只读取两个端点窗口，新增局部代理 P95/P99、接缝标记和适用范围。它不声称验证全轨迹功率或国家爬坡；完整日历的模型指标应读取上述 W06 表。
 
@@ -530,33 +551,35 @@ CPU/GPU 功率响应新增 `cpu_dynamic_exponent`、`gpu_dynamic_exponent`，默
 
 守恒检查区分源轨迹资源小时与模型资源小时，不要求两种单位直接相等。模型资源量须满足“容量×平均实际利用率×8,760 h”；设施电量按 PUE 闭合。默认容差为绝对 `1e-6` 加相对 `1e-10`，非法闭合会中止运行并报告失败记录。这些检查用于模型核算一致性，不代表外部预测精度。
 
-MLPerf 诊断在筛选后去除完全重复行，并审查同一 Public ID 内组织、系统名、加速器型号/数量、节点数和版本是否一致；冲突 ID 导出后排除，不再通过取加速器数量中位数掩盖差异。所有统计在各分层内先按 Public ID 汇总，再重采样；同一个 ID 可以出现在多个任务分层，分层之间不声称相互独立。Public ID 是分析单位，不保证不同 ID 对应不同物理硬件。
+MLPerf 诊断在资格筛选前去除完全重复的原始行，并审查同一 Public ID 内组织、系统名、加速器型号/数量、节点数和版本是否一致；冲突 ID 导出后排除，不通过取加速器数量中位数处理差异。所有统计在各分层内先按 Public ID 汇总，再重采样；同一个 ID 可以出现在多个任务分层，分层之间不声称相互独立。Public ID 是分析单位，不保证不同 ID 对应不同物理硬件。
 
 新增输出包括 `mlperf_public_id_audit.csv`、`mlperf_stratified_metrics.csv`、`mlperf_hardware_coverage.csv`、`mlperf_a100_h100_comparison.csv`、`validation_claim_scope.csv` 和 `validation_run_metadata.csv`。分层覆盖硬件族、型号中显式报告的 SXM/PCI 标签、单/多节点、Server/Offline 及推理任务；整机单位筛选不推断冷却或 GPU 部件测量边界。A100/H100 覆盖、各族误差和区间分别输出。单个独立 ID 只报告点估计，95% 区间为缺失；A100/H100 任一组不足两个 ID 时，组间中位数差不生成区间。固定种子和批量 bootstrap 保持结果可复现，并控制内存占用。
 
 保留旧文件名和统计字段以便后续衔接，但 `observed_power_max_w` 的含义是“该 ID 保留的任务报告功率中的最大值”，不是实测时序峰值，也不假设 GPU 满利用率。补图入口的标签相应更新。整体样本或硬件族误差仅属于 `external configuration diagnostic`，不验证 GPU 空闲/动态曲线、训练功率、PUE/设施能量或未来国家级精度，也不据样本百分位宣称配置保守。没有拟合曲线；未来拟合需要独立系统训练/验证划分及利用率—功率观测。
 
-图 4 和验证入口均支持 `--hardware-config-file`（`HardwarePowerConfig` 字段的 JSON 覆盖），实际配置完整导出；不传时沿用默认参数。自定义配置的对照仅保留合法份额和 idle/full 范围内的取值。验证入口新增 `--skip-figure`，可只导出诊断表，配合原有 `--skip-trace` 避免读取轨迹。统一运行入口的配置接入留待后续 W09。本轮未执行模型、测试或重新生成图表，全部修改完成后再统一运行。
+图 4 和验证入口均支持 `--hardware-config-file`（`HardwarePowerConfig` 字段的 JSON 覆盖），实际配置完整导出；不传时沿用默认参数。自定义配置的对照仅保留合法份额和 idle/full 范围内的取值。验证入口支持 `--skip-figure`，可只导出诊断表，配合 `--skip-trace` 避免读取轨迹。配置总入口将 `hardware` 设置同时用于模型实验和外部诊断。
 
-### W08 从新版图源重建图件
+### W08 从完整实验工作簿绘图
 
-重新生成四份图源工作簿后，单独执行绘图入口：
+完成配置运行后，从该运行的完整工作簿绘图：
 
 ```powershell
-python -B scripts/plot_figures.py --input-dir results --figures 1 2 3 4 --output-dir results/revision_w08/figures
+python -B scripts/plot_figures.py --input-dir results/reproduction_run/data --figures 1 2 3 4 --style original --formats svg pdf png tiff jpg --dpi 600 --output-dir results/reproduction_run/figures
+python -B scripts/plot_revision_supplements.py --input-dir results/reproduction_run/data --output-dir results/reproduction_run/figures --dpi 600
 ```
 
-绘图器要求工作簿包含 `W08_Figure_Contract`、`W08_Panel_Metadata` 和
-`W08_Display_Values`，会拒绝旧版工作簿。可通过 `--figure1-workbook` 至
+绘图器要求工作簿包含 `W08_Figure_Contract`、`W08_Panel_Metadata`、
+`W08_Display_Values` 和 `Accounting_Boundary`。精简审稿表不含这些工作表，
+不能作为绘图输入。可通过 `--figure1-workbook` 至
 `--figure4-workbook` 分别指定其他修订目录中的图源。默认导出可编辑 SVG/PDF
 及 PNG 预览；`--formats svg pdf tiff` 改为输出 TIFF。每张图同时导出图注、
 源数值、面板说明和哈希清单。已有输出需要 `--overwrite` 或新的输出目录。
 
-图 1 按情景名称取值，容量采用并列柱，c–e 面板展示四任务、五部件和未分配
-空闲池；图 2 明确 AI 设施排放范围；图 3 分开标注峰值功率（GW）与最大小时
-绝对爬坡（GW h⁻¹）；图 4 分开用电和排放，百分比以各自基线的年度总量均值
-为分母。微小非零数值保留有效数字。生成后仍须按最终尺寸检查版面，代码修改
-不代表图件已重新生成。
+`--style original` 是默认风格，与当前主图布局一致。图 1a 的深色 AI 专用 IT 容量区域位于总设施容量内，二者不相加；c–e 面板展示训练、推理和其他任务各自的五部件能量比例。补充图 S2 保留四类任务、系统部件占比和空闲池闭合。图 2 展示年度 CP 参考、避免排放及负荷加权碳强度。图 3 分开标注峰值功率（GW）与最大小时绝对爬坡（GW h⁻¹）。
+
+完整敏感性实验变化 15 个参数：图 4 分别展示六个参数的用电和排放响应，补充图 S3 展示另外九个机制控制。每个百分比使用该指标自身的基线作为分母，先逐年加总研究国家，再取 2026–2030 年均值。这些是确定性的单因素响应，不是联合不确定性区间。`--style expanded` 提供可选诊断布局，不复现当前主图面板。导出后应按最终尺寸检查版面。
+
+`scripts/refresh_manuscript_figures.py --sync-manuscript` 还会把完整实验工作簿复制到根目录的四个审稿表路径，并重写 LaTeX 图注，不保留精简审稿表。当前数据布局应采用上述绘图命令，再单独按展示数值准备审稿表。
 
 ### W09 统一端点配置与运行记录
 
@@ -568,7 +591,7 @@ python -B scripts/plot_figures.py --input-dir results --figures 1 2 3 4 --output
 准备好 W03 完整日历小时电网输入后，完整轨迹运行示例为：
 
 ```powershell
-python -B run.py --policy CP --scenarios Base --year-start 2026 --years 5 --annual-activity-mode calendar --idle-allocation-rule hourly_driver --hourly-carbon-factors-dir results/revision_audit/grid_w03/hourly_calendar --strict-hourly-carbon --hash-inputs --output-dir results/revision_w09/base_cp
+python -B run.py --policy CP --scenarios Base --year-start 2026 --years 5 --annual-activity-mode calendar --idle-allocation-rule hourly_driver --hourly-carbon-factors-dir results/grid_hourly_calendar --strict-hourly-carbon --hash-inputs --output-dir results/revision_w09/base_cp
 ```
 
 采用 W01/W02 选定的新因子时，显式附加 `--ai-capacity-factors-file`；省略时
@@ -635,8 +658,7 @@ Python 异常记录为 `failed`，键盘中断记录为 `interrupted`；原生�
 这些记录说明本地实际用了哪些文件和设置，不证明来源许可、投稿包完整性、
 远程可访问性或科学有效性。`audit_revision_inputs.py` 的来源账本继续记录未
 解决的来源缺口。图源和验证脚本仍为独立入口，应显式传入适用配置并检查各自
-元数据；`run.py` 不自动执行它们，也不静默传递它们不支持的选项。本次仅修改
-代码与文档，没有运行模型、测试或绘图。
+元数据；`run.py` 不自动执行它们，也不静默传递它们不支持的选项。
 
 ## Python 接口
 
@@ -663,11 +685,14 @@ result = run_workload_component_footprint(
     scenarios=["Base"],
     year_start=2026,
     years=5,
+    hourly_carbon_factors_dir="results/grid_hourly_calendar",
+    hourly_carbon_fallback_to_annual=False,
+    output_dir="results/hourly_api_run",
     save_hourly_outputs=False,
 )
 ```
 
-小时接口的 `hourly_carbon_scope` 可设为 `direct` 或 `life_cycle`。小时 CSV 默认不保存，以避免生成过大的文件。
+小时接口的 `hourly_carbon_scope` 可设为 `direct` 或 `life_cycle`。设定 `hourly_carbon_fallback_to_annual=False` 会拒绝缺失文件和不完整日历，对应命令行的 `--strict-hourly-carbon`。小时 CSV 默认不保存，以避免生成过大的文件。
 
 ## 主要参数
 
@@ -681,7 +706,8 @@ result = run_workload_component_footprint(
 | `pue_scale` | PUE 敏感性乘数 | `1.0` |
 | `ai_capacity_factors` | 年度 AI 容量校准 | `DEFAULT_AI_CAPACITY_FACTORS` |
 | `hourly_carbon_scope` | 小时碳强度边界 | `direct` 或 `life_cycle` |
-| `hourly_carbon_fallback_to_annual` | 小时文件缺失时使用年度因子 | `True` |
+| `hourly_carbon_factors_dir` | 处理后的小时电网输入目录 | 当前配置为 `results/grid_hourly_calendar` |
+| `hourly_carbon_fallback_to_annual` | 小时文件缺失时使用年度直接因子 | API 默认为 `True`，正式严格运行关闭 |
 | `capacity_quantile` | 轨迹容量清单分位数 | `0.96` |
 | `max_resource_utilization` | 归一化资源利用率上限 | `1.0` |
 | `max_intervals` | smoke test 的轨迹小时限制 | 默认使用完整轨迹 |
@@ -740,10 +766,10 @@ results/model_comparison/
 - 固定国家份额不表达跨地区迁移、国家份额变化或剩余全球容量份额。
 - 默认容量分配下，各国继承同一相对轨迹的缩放形状；W06 国别异质性配置是合成压力情景，不是独立国别行为预测。
 - 4,440 小时 Alibaba 轨迹重复到 CI 的 UTC 日历（2028 年 8,784 小时），再保持 8,760 小时年化电量。拼接边界可能决定未过滤的最大爬坡，应同时查看接缝标记和过滤指标。
-- 未来小时电网序列保留 2025 年相对形状，不预测调度、储能、进口和可变电源结构变化。
+- 未来小时电网序列继承处理后 2026 年 CP 模板的重建形状；原始 2025 年获取文件不可用。不预测调度、储能、进口和可变电源结构变化。
 - 部件份额、单位功率、空闲比例、风扇响应、内存活动和存储活动均为可配置参考假设。
 - MLPerf 诊断仅检查功率量级和偏差，不是校准拟合，也不验证未来国家级设施用电。
-- 缺失小时碳数据时可以回退到年度因子；解释时间结果前应检查 `carbon_factor_source`。
+- 兼容模式允许回退到年度直接因子；正式配置采用严格小时输入，拒绝缺失文件和不完整日历。解释时间结果前应检查 `carbon_factor_source`。
 - 小时级工作负载解析端点是透明参考配置，不是实测真值。
 
 ## 许可证
