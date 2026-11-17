@@ -1,0 +1,181 @@
+{
+  "schema_version": 1,
+  "source_experiment": "results/all_experiments_calendar_20261017_092038_285",
+  "role": "compact_source_tables_from_completed_experiment_not_a_new_model_run",
+  "accounting_scope": "24_selected_countries_2026_2030",
+  "source_sha256": {
+    "validation/validation_filter_audit.csv": "8e552a8e9dababc996066d8a7990edad139b4314c729c193a332ae15de77b036",
+    "validation/validation_metric_summary.csv": "08cd86ab3a776227af463dabae6a69fefa5825180d338af2ac4872fd616cd6b6",
+    "validation/mlperf_system_validation.csv": "7dd9ada46afdee6c0243e91d0eb398a67ac5e4ae360c521e43841ed496699c30",
+    "validation/mlperf_family_summary.csv": "2e361a8cd73a690905e369ef8e7ac0189657e612e1fa96b2337ab8f749b88133",
+    "validation/mlperf_stratified_metrics.csv": "f8243092cb482452dad773c769e9d399cf6c220354abfca141e96d98690d4345",
+    "validation/mlperf_hardware_coverage.csv": "f212e751343291bb927981420509d400082b75fee7525dd7c335492dad90cce6",
+    "validation/mlperf_a100_h100_comparison.csv": "5439df3f06233dfbb344a77b5f6fc1ed7e2af7a306c7ee4884f4184e1f13a663",
+    "validation/trace_boundary_diagnostics.csv": "67d3b36821f6232a41abd23ea661689d568e9a52772a1183c8037b06d67f98fb",
+    "validation/trace_seam_window.csv": "310bd8522f52f048b552019d2cf65ec1ea60379e67ff95b03f307f9b85da20f5",
+    "validation/national_scope_audit.csv": "02b32acc1a495e71277f5a9c8a7ca37e89e61befed9f7408285d34bb2a3cba36",
+    "validation/national_official_energy_series.csv": "5b612db78d2f73d635216d1760e1813ed830ab0740eda1315c9f1a622d644180",
+    "comparison/summary/Endpoint_Comparison_Selected_Countries_Annual.csv": "fc4f6fbbe673f0101909c39ac99e805daa2d9fe77d167559cda984ddbcbd137c",
+    "boundary/calibration_audit.csv": "7ceb31c90df6a1a853ad7b219405226c7149e1b28e700c90d326164c148c0616",
+    "boundary/invariant_checks.csv": "be390f3dfb02071c90c387ae6515c2537567678b30c4955ee2d944b61936b73c",
+    "data/figure1_data.xlsx": "b300de595ab7ce80d2747e453b290cb454900af71057b6d84481896e93df0802",
+    "data/figure3_data.xlsx": "ad78b2c9cee9ba9ab8e5a2f1981d7accde0537dd8b06a55b38f5568367d75f3a",
+    "data/figure4_data.xlsx": "fc021f6dd92df3ccf72a18768f7d5ceb24893e82f89a49d45899a555a37e9159"
+  },
+  "tables": [
+    {
+      "file": "S1_filter_audit.csv",
+      "rows": 11,
+      "sha256": "dd38ac9cc2d5760bfe2518ce47a0da30f4a0c3e78915f4e324864719aa4a0d69",
+      "source": "validation/validation_filter_audit.csv"
+    },
+    {
+      "file": "S1_metrics.csv",
+      "rows": 7,
+      "sha256": "9cc0232dd41b2db59251df589a4ccd7f758364d8ba0fd7419a2e6495c74b12c7",
+      "source": "validation/validation_metric_summary.csv"
+    },
+    {
+      "file": "S1_systems.csv",
+      "rows": 32,
+      "sha256": "4694edd2333e88b68429edd2dedf54019b10e3ba96c359abf51b2ef5c68fd3c9",
+      "source": "validation/mlperf_system_validation.csv"
+    },
+    {
+      "file": "S1_family_summary.csv",
+      "rows": 7,
+      "sha256": "2a01256d73283fd5ff9a5249df9dda2c70f3ceadc6996aba984c9049db13719a",
+      "source": "validation/mlperf_family_summary.csv"
+    },
+    {
+      "file": "S1_stratified_metrics.csv",
+      "rows": 880,
+      "sha256": "1c016f3427ccc885b892f41490015267d59507263c477d20f5eacc8117ff4156",
+      "source": "validation/mlperf_stratified_metrics.csv"
+    },
+    {
+      "file": "S1_hardware_coverage.csv",
+      "rows": 7,
+      "sha256": "9890608999aae8d8a33b6367b36a4bb47928b45e58d931b24e671d12574ea52a",
+      "source": "validation/mlperf_hardware_coverage.csv"
+    },
+    {
+      "file": "S1_a100_h100_comparison.csv",
+      "rows": 1,
+      "sha256": "c4ad64b3fc4e8942ee56cef0a0e0c8b754c79cebb397cbbf1590048e2e988468",
+      "source": "validation/mlperf_a100_h100_comparison.csv"
+    },
+    {
+      "file": "S1_trace_boundary.csv",
+      "rows": 13,
+      "sha256": "22fdb9a4b19866fba1726e4faf7127259d659288ffd59944edb96d49784fd3f6",
+      "source": "validation/trace_boundary_diagnostics.csv"
+    },
+    {
+      "file": "S1_trace_seam_window.csv",
+      "rows": 48,
+      "sha256": "be5b76fb6ba79c95124404ce357f6e47c8ce80051cbeadd73e4c1c6d2ddf8d5e",
+      "source": "validation/trace_seam_window.csv"
+    },
+    {
+      "file": "S1_national_scope.csv",
+      "rows": 2,
+      "sha256": "032d06da1e4083cc468ddeec97a8f60987077ed6dcffd4822a31182deda912e6",
+      "source": "validation/national_scope_audit.csv"
+    },
+    {
+      "file": "S1_national_series.csv",
+      "rows": 18,
+      "sha256": "42cb1563369f6c566fa7facfc235783c56d769258b7c65a5880a4366089f65bf",
+      "source": "validation/national_official_energy_series.csv"
+    },
+    {
+      "file": "annual_endpoint_comparison.csv",
+      "rows": 5,
+      "sha256": "574b8430b6c3106f709b654e4bf09484fa0348eb8bd35b45ebd6c43dd57c1f08",
+      "source": "comparison/summary/Endpoint_Comparison_Selected_Countries_Annual.csv"
+    },
+    {
+      "file": "boundary_calibration.csv",
+      "rows": 15,
+      "sha256": "51092c3dd4a76b0dad056595e704cb5101b4aa179a7666245d211aee55762bf3",
+      "source": "boundary/calibration_audit.csv"
+    },
+    {
+      "file": "boundary_invariants.csv",
+      "rows": 4,
+      "sha256": "959fb29a88420499c287bf9d08e133ed2e1925eb863c5e4d0decfd3929d70f28",
+      "source": "boundary/invariant_checks.csv"
+    },
+    {
+      "file": "S2_task_component_annual.csv",
+      "rows": 1200,
+      "sha256": "5e80eb7258b79950a63c2d59614bb226f1a0c0999bc0dcb70cb998f61ecca2c7",
+      "source": "data/figure1_data.xlsx",
+      "sheet": "W05_Task_Component_Annual"
+    },
+    {
+      "file": "S2_task_system_shares.csv",
+      "rows": 240,
+      "sha256": "e5739cc2131da7109b9ab8adcb8a6ec7bc25944652bb807f81199bc942db71cb",
+      "source": "data/figure1_data.xlsx",
+      "sheet": "W05_Task_System_Shares"
+    },
+    {
+      "file": "S2_component_system_shares.csv",
+      "rows": 300,
+      "sha256": "d1928a35b63d46b5075689e3fcfe7a5e4eb192e77decf483dfc1fea7dd4d7810",
+      "source": "data/figure1_data.xlsx",
+      "sheet": "W05_Component_System_Shares"
+    },
+    {
+      "file": "S2_system_closure.csv",
+      "rows": 60,
+      "sha256": "d8b9ab9bae43f678696ab8f92db030a7bcb4bfc48fa9c015ce589ad207350aa0",
+      "source": "data/figure1_data.xlsx",
+      "sheet": "W05_System_Closure"
+    },
+    {
+      "file": "S2_task_component_display.csv",
+      "rows": 25,
+      "sha256": "64445474e9f71e5a2168a6670f2f66f8a698d56aad3311b7f1feef48eb681a67",
+      "source": "data/figure1_data.xlsx",
+      "sheet": "W08_Task_Component_Display"
+    },
+    {
+      "file": "S4_peak_ramp.csv",
+      "rows": 125,
+      "sha256": "596a62b23e1a76724622eb07e384f135b23b9b0c60f06cedf8b7893774ee977a",
+      "source": "data/figure3_data.xlsx",
+      "sheet": "W06_Baseline_Peak_Ramp"
+    },
+    {
+      "file": "S4_timing_aggregate.csv",
+      "rows": 85,
+      "sha256": "1f8b17bf7c7d3f56b00c543660e63dfe17afcbb8e1683eab115801e693e43b64",
+      "source": "data/figure3_data.xlsx",
+      "sheet": "W06_Timing_Aggregate"
+    },
+    {
+      "file": "annual_activity_controls.csv",
+      "rows": 625,
+      "sha256": "bd7382fd94cb6408794f1a38d1657b49d9c1c91fc0caeecb6954714c676528d7",
+      "source": "data/figure3_data.xlsx",
+      "sheet": "W04_Control_Comparison"
+    },
+    {
+      "file": "annual_common_mean_loads.csv",
+      "rows": 160,
+      "sha256": "df06e1d9e51c1bf9bbdc19db84ef7417df2aa06fe734f7ffa86a9d35354113c2",
+      "source": "data/figure3_data.xlsx",
+      "sheet": "W04_Common_Mean_Load"
+    },
+    {
+      "file": "S3_sensitivity.csv",
+      "rows": 45,
+      "sha256": "5481a768b71957d3d4b674da7dd9d76e7881d4c5a4d604e8b8a6c5af624db173",
+      "source": "data/figure4_data.xlsx",
+      "sheet": "Fig4a_Sensitivity"
+    }
+  ]
+}

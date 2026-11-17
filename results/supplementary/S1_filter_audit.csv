@@ -1,0 +1,12 @@
+stage,rows_before,rows_after
+raw_rows,80930,80930
+remove_exact_duplicate_input_rows,80930,80907
+benchmark_inference,80907,78254
+system_type_datacenter,78254,7531
+division_closed,7531,6980
+scenario_server_or_offline,6980,6813
+whole_system_power_units,6813,556
+has_power_true,556,556
+nvidia_accelerator,556,422
+positive_numeric_power_accelerators_and_public_id,422,422
+consistent_metadata_within_Public_ID,422,422

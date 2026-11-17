@@ -32,7 +32,7 @@
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install numpy==1.26.4 pandas==2.3.3 pyarrow==21.0.0 openpyxl==3.1.5 matplotlib==3.9.2
+python -m pip install -r requirements.txt
 ```
 
 Linux 或 macOS 使用以下命令激活环境：
@@ -54,6 +54,16 @@ source .venv/bin/activate
 | 预置图源数据 | [results/](results/) | 用于查看已有图件数值的精简工作簿 |
 
 工作负载数据来自 [Alibaba Cluster Trace Program](https://github.com/alibaba/clusterdata)，电网数据可通过 [Electricity Maps](https://www.electricitymaps.com/data) 获取。外部轨迹和小时电网文件不纳入版本控制。
+
+[results/supplementary/](results/supplementary/README.md) 提供 S1–S4、全部 15 项敏感性实验、年度/小时端点及活动和校准边界对照的紧凑源表。这些表从原稿已完成的实验导出，`manifest.json` 记录来源与哈希，并非重新运行全量轨迹的结果。论文的硬件和年度活动参数已显式写入 `configs/experiments.json`。
+
+从另一套已完成的完整实验导出 SI 源表，可执行：
+
+```powershell
+python -B scripts/export_supplementary_sources.py --experiment-dir results/example_run --output-dir results/my_supplementary_sources
+```
+
+该命令读取已有结果及指定工作簿中的源表，不运行能耗模型或修改原稿；要求完整的 15 项 Low/Base/High 实验，输出目录必须是新目录。
 
 工作负载目录示例：
 
@@ -133,6 +143,26 @@ python -B run.py --policy CP --scenarios Base --year-start 2026 --years 5 --annu
 ```
 
 输出包含两个模型各自的结果，以及 `summary/` 下的比较表。差值百分比为正表示年度模型结果高于小时级参考配置。有序模型差异分解由 `figure3` 分析生成。
+
+### 检查年度参考假设
+
+图 3 分析新增六张 `W04_Reference_*` 补充表，对年度模型的推理任务份额、训练利用率、推理利用率和其他任务利用率分别进行单因素对照。取值由 `configs/experiments.json` 中的 `experiments.figure3.reference_sensitivity` 配置。默认共九个独立案例，只计算一次基准；其他任务份额固定，训练份额由一减去推理和其他份额得到。
+
+已有小时模型结果时，可单独补算这些对照，不重新读取轨迹或运行小时模型：
+
+```powershell
+python -B scripts/annual_reference_sensitivity.py --hourly-reference results/example_run/comparison/hourly_workload_resolved_model/Country_Annual_Summary_CP_Base.csv --output-dir results/reference_controls
+```
+
+该命令读取 Base–CP 的逐国逐年小时端点结果和当前实验配置，检查两端容量及 PUE 一致，不重新校准容量因子。输出包括完整案例参数、逐国和汇总差异、受测案例范围、边界检查及输入/代码哈希。输出目录必须是新目录。
+
+这些参数范围属于作者设定的压力测试，不是经验参数区间；结果范围不能解释为置信区间、联合不确定性或模型预测精度验证。已有活动趋势、共同均值、空闲能耗归属、国别时序和功率参数对照继续由原有图 1、3、4 入口输出。
+
+回归测试使用合成轨迹及工作区内的临时数据：
+
+```powershell
+python -B -m unittest discover -s tests -v
+```
 
 ### 运行功率诊断
 

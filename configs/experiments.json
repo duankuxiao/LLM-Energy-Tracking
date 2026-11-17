@@ -1,0 +1,94 @@
+{
+  "inputs": {
+    "workload_profile_path": "dataset",
+    "server_profile_path": null,
+    "hourly_carbon_factors_dir": "results/grid_hourly_calendar",
+    "ai_capacity_factors_file": null,
+    "mlperf": "dataset/validation/raw/mlperf_power_raw_data.csv",
+    "national": "dataset/validation/national_data_center_energy.csv"
+  },
+  "common": {
+    "countries": null,
+    "year_start": 2026,
+    "years": 5,
+    "hourly_carbon_scope": "direct",
+    "strict_hourly_carbon": true,
+    "capacity_quantile": 0.96,
+    "max_resource_utilization": 1.0,
+    "pue_scale": 1.0,
+    "idle_allocation_rule": "hourly_driver",
+    "max_intervals": null,
+    "parquet_batch_size": 65536,
+    "hash_inputs": false,
+    "verbose": true
+  },
+  "hardware": {
+    "cpu_power_share": 0.30,
+    "gpu_power_share": 0.50,
+    "memory_power_share": 0.12,
+    "storage_power_share": 0.03,
+    "it_fan_power_share": 0.05,
+    "cpu_full_power_w_per_core": 12.0,
+    "cpu_idle_power_w_per_core": 2.5,
+    "gpu_full_power_w": 250.0,
+    "gpu_idle_power_w": 25.0,
+    "memory_power_w_per_gb": 0.07,
+    "memory_idle_fraction": 0.80,
+    "storage_power_w_per_tb": 6.5,
+    "storage_idle_fraction": 0.60,
+    "it_fan_idle_fraction": 0.20,
+    "fan_cpu_weight": 0.35,
+    "fan_gpu_weight": 0.50,
+    "fan_memory_weight": 0.15,
+    "cpu_dynamic_exponent": 1.0,
+    "gpu_dynamic_exponent": 1.0
+  },
+  "trace": {
+    "trace_anchor_year": 2001,
+    "include_zero_gpu_pods": true,
+    "active_states": ["Running"],
+    "cap_gpu_sm_by_request": true
+  },
+  "annual_activity": {
+    "mode": "calendar",
+    "training_start": 0.90,
+    "training_target": 0.925,
+    "inference_start": 0.50,
+    "inference_target": 0.70
+  },
+  "output": {"directory": "results/all_experiments_calendar"},
+  "experiments": {
+    "figure1": {"enabled": true, "policy": "CP", "scenarios": ["Base", "Lift-Off", "High Efficiency", "Headwinds"]},
+    "figure2": {"enabled": true, "scenario": "Base", "country_display_top_n": 8},
+    "figure3": {
+      "enabled": true,
+      "reference_sensitivity": {
+        "enabled": true,
+        "levels": {
+          "default_p_infer": [0.60, 0.75, 0.90],
+          "u_train": [0.64, 0.80, 0.96],
+          "u_infer": [0.40, 0.50, 0.60],
+          "u_other": [0.40, 0.50, 0.60]
+        }
+      }
+    },
+    "figure4": {
+      "enabled": true,
+      "scenario": "Base",
+      "policy": "CP",
+      "sensitivity": {
+        "unit_power_scales": [0.8, 1.0, 1.2],
+        "dynamic_exponent_scales": [0.75, 1.0, 1.25],
+        "resource_variability_scales": [0.5, 1.0, 1.5],
+        "gpu_utilization_scales": [0.8, 1.0, 1.2],
+        "task_mix_inference_shifts": [-0.3, 0.0, 0.3],
+        "carbon_variability_scales": [0.5, 1.0, 1.5],
+        "idle_ratio_scales": [0.5, 1.0, 1.5],
+        "component_budget_scales": [0.8, 1.0, 1.2]
+      }
+    },
+    "comparison": {"enabled": true, "policy": "CP", "scenarios": ["Base"], "save_hourly_outputs": false},
+    "boundary": {"enabled": true, "policy": "CP"},
+    "validation": {"enabled": true, "bootstrap_replicates": 10000, "seed": 20260819, "trace_window_hours": 24, "trace_diagnostic": true}
+  }
+}

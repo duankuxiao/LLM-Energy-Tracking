@@ -1,0 +1,5 @@
+check,status,max_absolute_residual,unit
+common_scaling_preserves_energy_relative_gap,PASS,4.5297099404706393e-14,percentage_points
+common_scaling_preserves_carbon_relative_gap,PASS,5.169198402654729e-13,percentage_points
+country_capacity_energy_carbon_scale_together/recalibrated_global_reference,PASS,,
+country_capacity_energy_carbon_scale_together/homogeneous_intensity_boundary,PASS,,

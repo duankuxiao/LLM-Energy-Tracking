@@ -1,0 +1,8 @@
+accelerator_family,n_Public_IDs,n_workload_rows,n_task_models,n_scenarios,share_of_retained_Public_IDs_pct,status,future_fleet_representativeness_established
+A10,1,16,9,2,3.125,single_ID_no_interval,False
+A100,21,276,11,2,65.625,multiple_IDs,False
+A2,2,24,6,2,6.25,multiple_IDs,False
+A30,1,10,6,2,3.125,single_ID_no_interval,False
+H100,5,84,21,2,15.625,multiple_IDs,False
+L40S,1,2,1,2,3.125,single_ID_no_interval,False
+T4,1,10,5,2,3.125,single_ID_no_interval,False

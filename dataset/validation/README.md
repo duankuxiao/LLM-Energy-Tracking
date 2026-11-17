@@ -13,8 +13,9 @@ MLPerf Power analysis repository:
 
 The validation script retains Closed-division, data-centre inference submissions
 with Server or Offline measurements, NVIDIA accelerators, and reported whole-
-system power. `Public ID` is the independent unit; repeated workload rows are
-aggregated within a system submission.
+system power. `Public ID` is the resampling unit; repeated workload rows are
+aggregated within a submission. Different IDs do not establish independence
+of physical hardware.
 
 W07 treats this comparison as an external configuration diagnostic. The
 configured full-load reference is `gpu_full_power_w / gpu_power_share` per
@@ -53,8 +54,9 @@ Additional outputs under `results/model_validation/`:
 
 Optional `--hardware-config-file` supplies JSON overrides of the shared
 hardware configuration. `--skip-figure` produces tables only; `--skip-trace`
-also avoids the endpoint parquet read. The code revision has not regenerated
-these outputs; run it after the planned source updates are complete.
+also avoids the endpoint parquet read. Compact manuscript diagnostic tables
+are published under `results/supplementary/`; their export manifest identifies
+the completed experiment and source hashes.
 
 ## National data-centre electricity statistics
 
@@ -70,7 +72,7 @@ prediction errors.
 Run from the repository root:
 
 ```powershell
-python -m pip install numpy==2.1.3 pandas==2.2.3 pyarrow==17.0.0 openpyxl==3.1.5 matplotlib==3.9.2
+python -m pip install -r requirements.txt
 python scripts\validate_energy_model.py --bootstrap-replicates 10000
 ```
 

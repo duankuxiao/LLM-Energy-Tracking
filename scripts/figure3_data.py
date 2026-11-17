@@ -36,6 +36,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from core.annual_cpu_model import run_annual_cpu_model
+from core.annual_reference_controls import annual_reference_controls, validate_reference_sensitivity
 from core.annual_activity import (
     ACTIVITY_MODES, ACTIVITY_YEAR_START, ACTIVITY_YEAR_END, AnnualActivityConfig,
     REFERENCE_TASK_RATIOS, REFERENCE_TASK_UTILIZATION, reference_parameter_table,
@@ -1415,11 +1416,13 @@ def generate_figure3_data(
     ai_capacity_factors: Optional[Mapping[int, float]] = None,
     activity_config: Optional[AnnualActivityConfig] = None,
     experiment_context=None,
+    reference_sensitivity_config=None,
 ) -> Path:
     """Calculate fixed Base-CP Figure 3 panels a-d and write one workbook."""
     countries = list(countries)
     activity_config = activity_config or AnnualActivityConfig()
     activity_config.validate()
+    reference_sensitivity_config = validate_reference_sensitivity(reference_sensitivity_config)
     if hourly_carbon_scope != "direct":
         raise ValueError("Figure 3 requires direct factors in both endpoints; no comparable annual life-cycle table is supplied.")
     year_end = year_start + years - 1
@@ -1485,6 +1488,13 @@ def generate_figure3_data(
         workload_profile_path=workload_profile_path, server_profile_path=server_profile_path,
         capacity_quantile=capacity_quantile, max_resource_utilization=max_resource_utilization,
         max_intervals=max_intervals, ai_capacity_factors=ai_capacity_factors)
+    reference_controls = annual_reference_controls(
+        variant_results.loc[variant_results["variant"] == HOURLY_REFERENCE_VARIANT],
+        countries=countries, year_start=year_start, years=years,
+        activity_config=activity_config, ai_capacity_factors=ai_capacity_factors,
+        pue_scale=experiment_context.config.common["pue_scale"] if experiment_context is not None else 1.,
+        config=reference_sensitivity_config,
+        annual_runner=experiment_context.run_annual if experiment_context is not None else None)
 
     max_energy_check = float(
         annual_average_effects["energy_decomposition_check_mwh"].abs().max()
@@ -1518,6 +1528,7 @@ def generate_figure3_data(
         **temporal_baseline,
         **timing_controls,
         **controls,
+        **reference_controls,
         "Source_Bridge_Variants": variant_results,
         "Source_Country_Bridge": country_effects,
         "Accounting_Boundary": build_boundary_metadata(countries, ai_capacity_factors),

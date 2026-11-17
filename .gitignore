@@ -4,11 +4,14 @@ results/*
 !results/figure2_data.xlsx
 !results/figure3_data.xlsx
 !results/figure4_data.xlsx
+!results/supplementary/
+!results/supplementary/**
 
 .idea/
 __pycache__/
 *.pyc
 .vscode/
+.venv/
 *.log
 Thumbs.db
 .DS_Store

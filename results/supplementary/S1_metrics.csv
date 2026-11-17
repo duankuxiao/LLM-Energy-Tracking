@@ -1,0 +1,8 @@
+metric,estimate,ci_95_lower,ci_95_upper,independent_unit,n,bootstrap_replicates,bootstrap_seed,uncertainty_status,validation_role,generalizes_to_future_fleet
+normalized_mean_bias_error_pct,16.5233752406266,3.447329968881109,32.168215277081686,MLPerf Public ID system submission,32,10000,20260819,percentile_bootstrap,external_configuration_diagnostic,False
+median_absolute_percentage_error_pct,37.2929832786126,27.767461666115327,50.97942242343346,MLPerf Public ID system submission,32,10000,20260819,percentile_bootstrap,external_configuration_diagnostic,False
+root_mean_squared_error_w,990.581324119684,789.23041547428,1170.3981350677266,MLPerf Public ID system submission,32,10000,20260819,percentile_bootstrap,external_configuration_diagnostic,False
+median_prediction_observation_ratio,1.3565392430545264,1.1564254466077997,1.5097942242343347,MLPerf Public ID system submission,32,10000,20260819,percentile_bootstrap,external_configuration_diagnostic,False
+median_observed_power_per_accelerator_w,368.59106575,331.17095825,432.366826125,MLPerf Public ID system submission,32,10000,20260819,percentile_bootstrap,external_configuration_diagnostic,False
+model_implied_full_load_power_per_accelerator_w,500.0,,,model configuration,1,0,20260819,,external_configuration_diagnostic,
+empirical_percentile_of_model_reference_pct,87.5,,,MLPerf Public ID system submission,32,0,20260819,,descriptive_retained_sample_percentile_not_conservativeness,

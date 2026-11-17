@@ -1,0 +1,6 @@
+# Package versions recorded for the manuscript experiment environment.
+numpy==1.26.4
+pandas==2.3.3
+pyarrow==21.0.0
+openpyxl==3.1.5
+matplotlib==3.9.2

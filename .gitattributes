@@ -1,0 +1,2 @@
+# Keep the published table bytes stable for cross-platform SHA-256 checks.
+results/supplementary/*.csv text eol=lf

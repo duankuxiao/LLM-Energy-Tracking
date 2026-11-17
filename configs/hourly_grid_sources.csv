@@ -1,0 +1,25 @@
+country,path,source_year,source_kind,zone_id
+USA,../dataset/EM-CPNDCNZ/USA/snapshots_2026-02-10_US-CP-2026-hourly.csv,2026,reconstructed_shape,US
+China,../dataset/EM-CPNDCNZ/China/snapshots_2026-02-10_CN-CP-2026-hourly.csv,2026,reconstructed_shape,CN
+Japan,../dataset/EM-CPNDCNZ/Japan/snapshots_2026-02-10_JP-CP-2026-hourly.csv,2026,reconstructed_shape,JP
+France,../dataset/EM-CPNDCNZ/France/snapshots_2026-02-10_FR-CP-2026-hourly.csv,2026,reconstructed_shape,FR
+India,../dataset/EM-CPNDCNZ/India/snapshots_2026-02-10_IN-CP-2026-hourly.csv,2026,reconstructed_shape,IN
+Singapore,../dataset/EM-CPNDCNZ/Singapore/snapshots_2026-02-10_SG-CP-2026-hourly.csv,2026,reconstructed_shape,SG
+Canada,../dataset/EM-CPNDCNZ/Canada/snapshots_2026-02-10_CA-CP-2026-hourly.csv,2026,reconstructed_shape,CA
+Germany,../dataset/EM-CPNDCNZ/Germany/snapshots_2026-02-10_DE-CP-2026-hourly.csv,2026,reconstructed_shape,DE
+United_Kingdom,../dataset/EM-CPNDCNZ/Great Britain/snapshots_2026-02-10_GB-CP-2026-hourly.csv,2026,reconstructed_shape,GB
+Australia,../dataset/EM-CPNDCNZ/Australia/snapshots_2026-02-10_AU-CP-2026-hourly.csv,2026,reconstructed_shape,AU
+Italy,../dataset/EM-CPNDCNZ/Italy/snapshots_2026-02-10_IT-CP-2026-hourly.csv,2026,reconstructed_shape,IT
+South_Korea,../dataset/EM-CPNDCNZ/South_Korea/snapshots_2026-02-10_KR-CP-2026-hourly.csv,2026,reconstructed_shape,KR
+South_Africa,../dataset/EM-CPNDCNZ/South_Africa/snapshots_2026-02-10_ZA-CP-2026-hourly.csv,2026,reconstructed_shape,ZA
+Ireland,../dataset/EM-CPNDCNZ/Ireland/snapshots_2026-02-10_IE-CP-2026-hourly.csv,2026,reconstructed_shape,IE
+UAE,../dataset/EM-CPNDCNZ/UAE/snapshots_2026-02-10_AE-CP-2026-hourly.csv,2026,reconstructed_shape,AE
+Brazil,../dataset/EM-CPNDCNZ/Brazil/snapshots_2026-02-10_BR-CP-2026-hourly.csv,2026,reconstructed_shape,BR
+Israel,../dataset/EM-CPNDCNZ/Israel/snapshots_2026-02-10_IL-CP-2026-hourly.csv,2026,reconstructed_shape,IL
+Netherlands,../dataset/EM-CPNDCNZ/Netherlands/snapshots_2026-02-10_NL-CP-2026-hourly.csv,2026,reconstructed_shape,NL
+Spain,../dataset/EM-CPNDCNZ/Spain/snapshots_2026-02-10_ES-CP-2026-hourly.csv,2026,reconstructed_shape,ES
+Sweden,../dataset/EM-CPNDCNZ/Sweden/snapshots_2026-02-10_SE-CP-2026-hourly.csv,2026,reconstructed_shape,SE
+Belgium,../dataset/EM-CPNDCNZ/Belgium/snapshots_2026-02-10_BE-CP-2026-hourly.csv,2026,reconstructed_shape,BE
+Norway,../dataset/EM-CPNDCNZ/Norway/snapshots_2026-02-10_NO-CP-2026-hourly.csv,2026,reconstructed_shape,NO
+Poland,../dataset/EM-CPNDCNZ/Poland/snapshots_2026-02-10_PL-CP-2026-hourly.csv,2026,reconstructed_shape,PL
+Switzerland,../dataset/EM-CPNDCNZ/Switzerland/snapshots_2026-02-10_CH-CP-2026-hourly.csv,2026,reconstructed_shape,CH
